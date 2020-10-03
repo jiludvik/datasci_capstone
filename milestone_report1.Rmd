@@ -1,11 +1,11 @@
 ---
 title: 'Data Science Capstone: Milestone Report 1'
+subtitle: 'Word Prediction With R: Exploratory Data Analysis'
 author: "Jiri Ludvik"
-date: "02/10/2020"
+date: "03/10/2020"
 output:
   html_document: default
   pdf_document: default
-subtitle: Exploratory Data Analysis
 ---
 
 ```{r global_options, include=FALSE}
@@ -35,7 +35,7 @@ This report summarises progress so far on Data Science Capstone project, in part
 * Term frequency analysis suggests relatively high levels of predictive accuracy can be achieved with a modest number of unique words; however the number of of two and three word combinations required for the desired levels of accuracy is relatively large and may require continuous attention in the subsequent steps.
 * Next steps will involve training, optimisation, testing of the predictive algorithm and development of a web app allowing its deployment on the web.
 
-Source code used to produce this report is available at https://github.com/jiludvik/datasci_capstone/blob/master/milestone_report1.Rmd.
+Source code used to produce this report is available in [Github](https://github.com/jiludvik/datasci_capstone/blob/master/milestone_report1.Rmd).
 
 ```{r dependencies, include=FALSE}
 library(readr) # read files and guess encoding
@@ -48,6 +48,7 @@ library(igraph) # transformation of bigrams to directional graphs
 library(ggplot2) # frequency and barplots
 library(ggraph) # generation of network graph visuals
 library(gridExtra) # side by side plotting
+library(kableExtra) # formatting of tables in Rmd
 ```
 
 ## Source Data
@@ -57,7 +58,7 @@ Exploratory data analysis has focused on analysis of [three English language cor
 Additional data sets have been used to support data cleansing:
 
 * A copy of Google's [Profanity Words](https://github.com/jiludvik/Google-profanity-words) 
-* [Twitter Slang](https://www.kaggle.com/gogylogy/twitterslang). 
+* [Twitter Slang](https://www.kaggle.com/gogylogy/twitterslang) list from Kaggle. 
 
 ```{r data_load, include=FALSE, cache=TRUE, cache.lazy = FALSE}
 # Function that loads data into a tibble and adds source name and row no
@@ -101,30 +102,36 @@ for (filename in dir(input_path)) {
 ## Data Summary
 The table below gives an overview of file sizes, number rows, sentence and word counts per file:
 
-``` {r data_summary, echo=FALSE}
+``` {r summary_counts, echo=FALSE}
 
-summary_df=data.frame()
-for (i in 1:3){
-  summary_df<-rbind(summary_df,data.frame(
-    source=rows[[i]][1,2],
-    size_MB=filesize[i],
-    rowlen_min=min(rows[[i]]$row_len, na.rm=TRUE),
-    rowlen_mean=round(mean(rows[[i]]$row_len, na.rm = TRUE),0),
-    rowlen_max=max(rows[[i]]$row_len, na.rm = TRUE),
-    total_rows=nrow(rows[[i]]),
-    total_sentences=nrow(sentences[[i]]),
-    total_words=nrow(words[[i]]))
+summary_counts=data.frame()
+for (i in 1:3) {
+  summary_counts<-rbind(summary_counts,data.frame(
+    `file name`=rows[[i]][1,2],
+    `size MB`=filesize[i],
+    `total rows`=nrow(rows[[i]]),
+    `total sentences`=nrow(sentences[[i]]),
+    `total words`=nrow(words[[i]]))
   )
 }
-summary_df %>% select(-rowlen_min, -rowlen_mean, -rowlen_max)
+summary_counts %>% kable %>% kable_styling(bootstrap_options = "striped", full_width = F)
 ```
 
 Considering the large file sizes, we will need to sample the data to speed up processing and avoid memory bottlenecks on the processing system. 
 
-Building on the above statictics, let us explore summary of the row lengths (in characters).
-``` {r rows_summary, echo=FALSE}
+Let us also explore summary of the row lengths in characters.
+``` {r summary_rowlens, echo=FALSE}
+summary_rowlens=data.frame()
+for (i in 1:3) {
+  summary_rowlens<-rbind(summary_rowlens,data.frame(
+    `file name`=rows[[i]][1,2],
+    `min row len`=min(rows[[i]]$row_len, na.rm=TRUE),
+    `mean row len`=round(mean(rows[[i]]$row_len, na.rm = TRUE),0),
+    `max row len`=max(rows[[i]]$row_len, na.rm = TRUE))
+  )
+}
 
-summary_df %>% select(source, rowlen_min, rowlen_mean, rowlen_max)
+summary_rowlens %>% kable %>% kable_styling(bootstrap_options = "striped", full_width = F)
 ```
 
 We can also see that while the number of rows in the twitter data set is larger than the other two files, the maximum twitter row length is limited to 140 characters, and mean row length is still three times shorter than for the other data sets, which will need to be reflected in higher twitter sampling rate.
@@ -137,18 +144,21 @@ gc()
 ### Source Data Samples
 Before proceding with further steps, let us manually inspect a few randomly sampled rows from each data set.
 
-1. Weblogs
+**Weblogs**
 ```{r blog_sample, echo=FALSE}
+set.seed(1)
 print(sample(rows[[1]]$value, 3))
 ```
 
-2. News
+**News**
 ```{r news_sample, echo=FALSE}
+set.seed(1)
 print(sample(rows[[2]]$value, 3))
 ```
 
-3. Twitter
+**Twitter**
 ```{r twitter_sample, echo=FALSE}
+set.seed(1)
 print(sample(rows[[3]]$value, 3))
 ```
 
@@ -164,7 +174,7 @@ Following observations have been arrived to upon a close inspection of the sourc
 To obtain data suitable for for further analysis requires several pre-processing steps, including [sampling](https://en.wikipedia.org/wiki/Sampling_(statistics)), [tokenisation](https://en.wikipedia.org/wiki/Lexical_analysis#Tokenization), filtering and calculation of statistics used in exploratory analysis.
 
 ### Source Data Sampling
-To speed up further processing and avoid resource bottlenecks, first we sampled the there source files and prepared a single sampled data set.
+To speed up further processing and avoid resource bottlenecks, we have first sampled the there source files and prepared a single sampled data set. 
 ```{r rows_sampling, include=FALSE}
 row_sample=data.frame()
 set.seed(0)
@@ -180,11 +190,20 @@ row_sample<-row_sample %>%
                        en_US.twitter.txt="twitter", 
                        en_US.news.txt="news"), .keep="unused") %>%
   select(-row_len)
+
+sampled_row_no<-row_sample%>% group_by(source)%>% summarise(n=n())
+```
+Sampling rates for individual data sets have been adjusted to compensate for the difference in row lengths arriving to the following numbers of sampled rows.
+```{r sampled_row_no, echo=FALSE}
+row_sample%>% 
+        group_by(source)%>% 
+        summarise(n=n())%>% 
+        kable %>% 
+        kable_styling(bootstrap_options = "striped", full_width = F)
 ```
 
-
 ### Data Pre-Processing
-As a key preparatory step, we now need pre-process the unified sampled data. In our case, this process includes 
+As a key preparatory step, we now need pre-process the unified sampled data. In our case, this process included:
 
 * tokenisation, or splitting the sampled text into words and combinations of two and three words, (so-called [bi-grams and tri-grams](https://en.wikipedia.org/wiki/N-gram));
 * filtering of characters and words that would be detrimental to the quality of word prediction;
@@ -311,10 +330,13 @@ ngram_summary<- c('total', n_distinct(word_sample$term), n_distinct(bigram_sampl
 
 term_summary<-rbind(data.frame(word_summary,bigrams=bigram_summary$unique, trigrams=trigram_summary$unique), ngram_summary)
 
-term_summary
+term_summary %>% 
+        kable %>% 
+        kable_styling(bootstrap_options = "striped", full_width = F)
+
 ```
 
-Considering all Shakespeare's works [contain over 28,000 unique words](http://opensourceshakespeare.org/stats/), we can conclude that the number of unique words in our text sample (which in turn is driving the number of bigrams and trigrams) is quite large and all will probably need to be reduced prior to modelling.
+Comparing these numbers to the [number of unique words in all Shakespeare's works] (http://opensourceshakespeare.org/stats/), we can conclude that the number of unique words in our text sample (which in turn is driving the number of bigrams and trigrams) is quite large and all will probably need to be reduced prior to modelling.
 
 ### Term Frequency
 Let's confirm this intuition by inspecting the terms with highest frequency.
@@ -330,16 +352,19 @@ top5bigrams<-bigram_sample%>% group_by(source) %>%
 top5trigrams<-trigram_sample%>% group_by(source) %>% 
   slice_max(order_by=n, n=5, with_ties = FALSE)
 
-as.data.frame(cbind(words=top5words, bigrams=top5bigrams$term, trigrams=top5trigrams$term))
+cbind(words=top5words, bigrams=top5bigrams$term, trigrams=top5trigrams$term) %>%
+        kable %>% 
+        kable_styling(bootstrap_options = "striped", full_width = F)
+
 ```
 
-As we can see above, all of most frequent words and n-grams are stop-words. As stop-words are important for word prediction use cases, we want to maintain them in our dictionary. However, to avoid excessive recommendations of stop-words during the prediction, we need to use an alternative approach to weighting terms in the dictionary.
+As we can see above, all of most frequent words and n-grams are stop-words. As stop-words are important for word prediction, we want to keep them in our dictionary, but to avoid their excessive recommendation to the end user, we will have to find  an alternative approach to weighting terms in the dictionary.
 
 ### Word Importance
 One such alternative approach to wighting the terms would be to use [term frequency / inverse document frequency](https://en.wikipedia.org/wiki/Tf–idf) (or tf-idf) statistic, often used to measure how important the word is to a document in a corpus.
 
 Top terms ordered by tf-idf are as follows:
-```{r term_importance_plot, echo=FALSE, fig.height=2, fig.width = 8}
+```{r term_importance_plot, echo=FALSE, fig.height=2, fig.width = 9}
 
 #Plot results
 word_sample %>% 
@@ -379,9 +404,9 @@ trigram_sample %>%
 As you can see from the plots, a number of stop-words has disappeared. We can thereforce conclude that using tf-idf as an approach to weighting terms for prediction when using a corpus that contain stop-words rather than using frequency weighted dictionary.
 
 ### Detecting Infrequently Used Terms
-Whilst we have an effort to filter out terms that do not exist in American English dictionary words as part of pre-processing, from the plots above, it is possible that some misspellings remain in our dictionary. To help us find such terms, we can use [Inverse Document Frequency](https://en.wikipedia.org/wiki/Tf–idf#Inverse_document_frequency_2) (or idf) statistic..
+Whilst we have an effort to filter out terms that do not exist in American English dictionary words as part of pre-processing, from the plots above, it is possible that some misspellings remain in our dictionary. To help us find such terms, we can use [Inverse Document Frequency](https://en.wikipedia.org/wiki/Tf–idf#Inverse_document_frequency_2) (or idf) statistic helping to identify terms that appear rarely in corpus.
 
-For illustration, let's look at several terms with the highest inverse document frequency.
+For illustration, let's look at several terms with the highest inverse document frequency (i.e. some of those that appear rarely).
 
 ```{r top_terms_by_idf, echo=FALSE}
 top5words_byidf<-word_sample%>% group_by(source) %>% 
@@ -395,7 +420,12 @@ top5bigrams_byidf<-bigram_sample%>% group_by(source) %>%
 top5trigrams_byidf<-trigram_sample%>% group_by(source) %>% 
   slice_max(order_by=idf, n=5, with_ties = FALSE)
 
-as.data.frame(cbind(words=top5words_byidf, bigrams=top5bigrams_byidf$term, trigrams=top5trigrams_byidf$term))
+cbind(words=top5words_byidf, 
+      bigrams=top5bigrams_byidf$term, 
+      trigrams=top5trigrams_byidf$term) %>% 
+        kable %>% 
+        kable_styling(bootstrap_options = "striped", full_width = F)
+
 ```
 As we can see, all terms above are in English and have the correct spelling, confirming the assumption that the usage of spellcheck and tf-idf ordered dictionary took care of the misspellings and non-English words.
 
@@ -403,7 +433,7 @@ As we can see, all terms above are in English and have the correct spelling, con
 
 When sizing up the dictionary, it is useful to understand language coverage, i.e. how many unique words do you need in a frequency sorted dictionary to cover a specific proportion of  instances of the term in the document. To start answering this question, let's explore distribution of frequencies of words, bi-grams and tri-grams in our text sample as a first approximation.
 
-```{r term_freq_dist_plot, echo=FALSE}
+```{r term_freq_dist_plot, echo=FALSE, fig.height=4, fig.width = 9}
 
 p1<- ggplot(word_sample, aes(x=n)) +
         geom_histogram(show.legend = FALSE) +
@@ -433,7 +463,7 @@ From the plots above, we can see that frequency with which words, bi-grams and t
 
 We refine the answer to the question by exploring cumulative term frequencies of terms arranged according to their frequency.
 
-```{r coverage_plot, echo=FALSE}
+```{r coverage_plot, echo=FALSE, fig.height=4, fig.width = 9}
 p1<- ggplot(word_sample, aes(y=rank, x=cum_term_freq*100)) +
   geom_line(size = 1.1, alpha = 0.8, show.legend = FALSE) +   
   scale_y_log10() + 
@@ -470,20 +500,23 @@ get_unique_term_no <- function(df){
 data.frame(coverage=c('50%','60%','70%','80%','90%'),
       words=get_unique_term_no(word_sample),
       bigrams=get_unique_term_no(bigram_sample),
-      trigrams=get_unique_term_no(trigram_sample))
+      trigrams=get_unique_term_no(trigram_sample)) %>%
+        kable %>% 
+        kable_styling(bootstrap_options = "striped", full_width = F)
+
 ```
-As we can see from the above, to achieve 90% coverage, we could reduce the number of words in the dictionary from almost three-fold for words. For bi-grams and tri-grams, the number of terms in our dictionary is almost sufficient to provide 90% coverage. We can use understanding of these relationships in the next stage to help us size up the dictionary used to train the model.
+As we can see, to achieve 90% coverage for all n-grams, we could reduce the number of unique words in the dictionary almost three-fold, whilst keeping all unique bi-grams and tri-grams. We can use understanding of these relationships in the next stage to help us size up the dictionary used to train the model.
 
 ### Increasing Coverage
 A number of approaches could be used in case resource limitations prevent us from using the complete dictionaries providing the desired language coverage. The two simplest approaches are as follows:
 
-1) Increase size of the sample used to produce the dictionaries (beyond 0.7-2% used to produce the above illustration) to find terms with greater coverage
-2) Combine trigram, bigram and word with high frequencies to increase overall coverage without increasing the size, e.g. 50% trigram coverage, 70% bigram coverage, and 90% word coverage.
+1) Increase size of the sample used to produce the dictionaries to find terms with greater language coverage than the terms in our sample
+2) Combine a subset of frequent trigrams, bigrams and words with varying coverage (e.g. 50% trigram coverage, 70% bigram coverage, and 90% word coverage) to achieve acceptable levels of overall coverage across all n-grams
 
-Other strategies such as lemmatisation of words entered by the user (with subsequent de-lemmatisaton of recommended words), or usage of thesaurus to map unknown words to known words are also possible, but considering their complexity we are not going to use them in this project.
+Other strategies such as lemmatisation of words entered by the user (with subsequent de-lemmatisaton of predicted words), or usage of thesaurus to map unknown words to known words could be used, but considering their complexity we will not attempt to use them in this project.
 
 ## Next Steps
-My next steps in regards to development of the predictive algorithm and Shiny app are as follows:
+The proposed next steps in regards to development of the predictive algorithm and Shiny app are as follows:
 
 * Develop a *small* training data set using a combination of words, bi-grams and n-grams;
 * Train a word prediction algorithm, using dictionary weighted by tf_idf;
