@@ -1,0 +1,451 @@
+---
+title: "Notebook 3. N-Gram Preprocessing"
+output: html_notebook
+---
+
+```{r dependencies}
+library(tidyverse)
+library(textclean)
+library(tidytext)
+library(hunspell)
+```
+
+## Load Full Raw Datasets
+Load data from twitter, news and weblogs adding a row number + load list of toxic words
+```{r load_raw_data}
+setwd('~/Documents/data_science_jhu/10_capstone')
+input_path='input/final/en_US/'
+rows=list(); i=0
+for (filename in dir(input_path)) {
+        i=i+1  
+        rows[[i]] <- as_tibble(read_lines(paste0(input_path,filename))) %>%
+                mutate(row_no=row_number())
+        head(rows[[i]])
+}
+toxic_words<-data.frame(term=read_lines('input/bad_words.txt'))
+```
+
+## Split Fukk Datasets to Training and Test Sets
+
+Split raw data into test and train data set (70/30)
+
+```{r split_raw_data}
+target_path='intermediate/split/'
+dir.create(target_path)
+file_prefix= dir(input_path) %>% str_remove('.txt')
+
+#Load data, split into training and test and save to the disk
+for (i in 1:3){
+        message(paste(dir(input_path)[i], 'rows:',nrow(rows[[i]])))
+        train<-rows[[i]] %>% sample_frac(0.7)
+        test<- rows[[i]] %>% anti_join(train, by="row_no")
+        message('...test and training samples splitting complete')
+        train_name<-paste0(target_path,file_prefix[i],'_train.rds')
+        test_name<-paste0(target_path,file_prefix[i],'_test.rds')
+        write_rds(x=train, path=train_name, compress="gz")
+        message(paste('...training data saved'))
+        write_rds(x=test, path=test_name, compress="gz")
+        message(paste('...training data saved'))
+}
+# Remove temporary variables and free up memory
+rm(rows)
+rm(train)
+rm(test)
+gc()
+```
+
+## Reload Taining Data Set
+Clean rows with cleansing techniques that don't break logical sequence of n grams
+```{r load_training_data}
+# Reload full training dataset from the disk
+rows=list()
+input_path='intermediate/split/'
+
+i=0
+
+for (filename in dir(path=input_path, pattern="*train*")) {
+        i=i+1
+        rows[[i]]<-read_rds(paste0(input_path,filename))
+        message(paste('rows[[',i,']]:', nrow(rows[[i]]),'rows loaded'))
+}
+```
+
+## Sample Training Data
+Sample training data from the full data sets into combine into a single data frame
+
+```{r generate_row_sample}
+overall_sampling_rate=0.1 # Blended sampling rate from training data set
+set.seed(0)
+rows_sample=data.frame()
+#rows_sample_rate=c(0.007,0.01,0.02)/20
+rows_sample_rate=c(0.7,1,2)*overall_sampling_rate
+for (i in 1:3) rows_sample<- rbind(rows_sample, 
+                                  sample_frac(rows[[i]] ,rows_sample_rate[i]))
+head(rows_sample)
+```
+
+## Clean Row Sample
+```{r clean_row_sample}
+# Clean training data sample rows
+rows_clean<-rows_sample %>% 
+        mutate(value=value%>%
+                       replace_white() %>%
+                       replace_hash() %>%
+                       replace_tag() %>%
+                       replace_url(replacement = "") %>%
+                       str_remove_all(pattern = "(?![.,!])[[:punct:]]") %>% 
+                       str_remove_all(pattern = "[0-9]") %>%
+                       str_replace_all(pattern = "[.]", replacement = " .") %>% 
+                       str_replace_all(pattern = "[!]", replacement = " !") %>% 
+                       str_replace_all(pattern = "[,]", replacement = " ,") %>%
+                       replace_contraction() %>%
+                       replace_word_elongation()) %>%
+        filter(value!='' | !is.na(value))
+        
+head(rows_clean)
+```
+
+```{r}
+rm(rows)
+rm(rows_split)
+rm(rows_sample)
+gc()
+```
+
+##Pre-Process Unigrams
+Tokenise rows into words, do some additional word-level cleansing, and calculate term frequencies
+```{r preprocess_unigrams}
+# Tokenise pre-cleansed rows into words, do additional cleaning
+word_sample <- rows_clean %>% 
+        unnest_tokens(output=term, input=value, # split to words
+                      token= "words", 
+                      strip_numeric = TRUE, strip_punct = TRUE)%>% 
+        filter (!str_detect(term, '.*\\d.*'))%>% # drop words with digits
+        filter (!(str_detect(term, '_'))) %>% # drop words with _
+        anti_join(y=toxic_words, by="term") %>% # drop profanities
+        mutate(term=term %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names()) %>%
+        filter(term!='')
+
+# Spell-check words (split out of the previous pipeline to prevent some weird errors)
+word_sample<- word_sample%>% 
+        filter(hunspell_check(word_sample$term, dict = dictionary("en_US")))
+
+# Calculate term frequencies
+word_sample<- word_sample %>%
+        group_by(term) %>%
+        summarise(term_instances_in_sample=n()) %>%
+        ungroup()%>%
+        mutate(total=sum(term_instances_in_sample), term_freq=term_instances_in_sample/total) %>% 
+        arrange(by=desc(term_instances_in_sample))
+
+head(word_sample)
+nrow(filter(word_sample,term_instances_in_sample>=10))
+```
+
+```{r}
+word_sample<- word_sample %>%
+        arrange(by=desc(term_freq)) %>% # arrange by term frequency
+        mutate(rank = row_number(), # Add rank
+               cum_term_freq =cumsum(term_freq)) # Add cumulative term frequency
+message ('Cumulative term frequencies calculated')
+```
+
+
+```{r save_preprocessed_unigrams}
+target_path='intermediate/pre-processed/'
+dir.create(target_path)
+write_rds(x=word_sample, path=paste0(target_path,'unigrams_full.rds'), compress="gz")
+message('\nPre-processed unigrams saved')
+```
+
+
+## Pre-Process Bigrams
+Tokenise rows to bigrams, drop bigrams with toxic words, digits and internet slang, and bigrams whose words did not pass spellcheck.
+```{r}
+set.seed(0)
+bigram_sample<- rows_clean %>% 
+        unnest_tokens(input=value, output=term, token= "ngrams", n=2) %>%
+        separate(term, c("word1", "word2"), sep = " ", remove = FALSE) %>%
+        filter(!(word1 %in% toxic_words$term) & !str_detect(word1, '.*\\d.*'))%>%  
+        filter(!(word2 %in% toxic_words$term) & !str_detect(word2, '.*\\d.*')) %>%
+        mutate(word1=word1 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names(),
+               word2=word2 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names()) %>%
+        filter(word1!='' & word2!='')
+nrow(bigram_sample)
+
+# Spellcheck
+bigram_sample <- bigram_sample %>%
+  filter(hunspell_check(bigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(bigram_sample$word2, dict = dictionary("en_US"))) 
+
+# Calculate term frequencies
+bigram_sample<- bigram_sample %>%
+        group_by(term) %>%
+        summarise(term_instances_in_sample=n()) %>%
+        ungroup()%>%
+        mutate(total=sum(term_instances_in_sample), term_freq=term_instances_in_sample/total) %>% 
+        arrange(by=desc(term_instances_in_sample)) %>%
+        separate(term, c("word1", "word2"), sep = " ", remove = FALSE)
+
+head(bigram_sample)
+nrow(bigram_sample)
+nrow(filter(bigram_sample,term_instances_in_sample>=10))
+
+```
+
+```{r}
+bigram_sample<- bigram_sample %>%
+        arrange(by=desc(term_freq)) %>% # arrange by term frequency
+        mutate(rank = row_number(), # Add rank
+               cum_term_freq =cumsum(term_freq)) # Add cumulative term frequency
+message ('Cumulative term frequencies calculated')
+```
+
+
+```{r save_preprocessed_bigrams}
+target_path='intermediate/pre-processed/'
+dir.create(target_path)
+write_rds(x=bigram_sample, path=paste0(target_path,'bigrams_full.rds'), compress="gz")
+message('\nPre-processed bigrams saved')
+```
+
+
+## Pre-Process Trigrams
+```{r preprocess_trigrams}
+set.seed(0)
+trigram_sample<- rows_clean %>% 
+        unnest_tokens(input=value, output=term, token= "ngrams", n=3) %>%
+        separate(term, c("word1", "word2", "word3"), sep = " ", remove = FALSE) 
+message('Trigram tokenisation complete')
+trigram_sample<-trigram_sample %>%
+        filter(!(word1 %in% toxic_words$term) & !str_detect(word1, '.*\\d.*'))%>%  
+        filter(!(word2 %in% toxic_words$term) & !str_detect(word2, '.*\\d.*')) %>%
+        filter(!(word3 %in% toxic_words$term) & !str_detect(word3, '.*\\d.*')) 
+message('Words with digits and toxic words filtering complete')
+
+trigram_sample<-trigram_sample %>%
+        mutate(word1=word1 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names(),
+               word2=word2 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names(),
+               word3=word3 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names()) %>%
+        filter(word1!='' & word2!='' & word3!='')
+message('Internet slang and people names filtering complete')
+
+# Spellcheck
+trigram_sample <- trigram_sample %>%
+  filter(hunspell_check(trigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(trigram_sample$word2, dict = dictionary("en_US")) & hunspell_check(trigram_sample$word3, dict = dictionary("en_US"))) 
+message('Spellcheck complete')
+```
+
+```{r}
+# Calculate term frequencies
+trigram_sample<- trigram_sample %>%
+        group_by(term) %>%
+        summarise(term_instances_in_sample=n()) %>%
+        ungroup()%>%
+        mutate(total=sum(term_instances_in_sample), term_freq=term_instances_in_sample/total) %>% 
+        arrange(by=desc(term_instances_in_sample)) %>%
+        separate(term, c("word1", "word2", "word3"), sep = " ", remove = FALSE)
+message ('Term counts and frequencies calculated')
+nrow(trigram_sample)
+```
+
+```{r}
+trigram_sample<- trigram_sample %>%
+        arrange(by=desc(term_freq)) %>% # arrange by term frequency
+        mutate(rank = row_number(), # Add rank
+               cum_term_freq =cumsum(term_freq)) # Add cumulative term frequency
+message ('Cumulative term frequencies calculated')
+```
+
+```{r save_preprocessed_trigrams}
+  target_path='intermediate/pre-processed/'
+dir.create(target_path)
+write_rds(x=trigram_sample, path=paste0(target_path,'trigrams_full.rds'), compress="gz")
+message('\nPre-processed trigrams saved')
+```
+
+## Pre-Process Quadrigrams
+```{r preprocess_quadrigrams}
+gc()
+set.seed(0)
+quadrigram_sample<- rows_clean %>% 
+        unnest_tokens(input=value, output=term, token= "ngrams", n=4) %>%
+        separate(term, c("word1", "word2", "word3", "word4"), sep = " ", remove = FALSE)
+message('Quadrigram tokenisation complete')
+```
+
+```{r}
+quadrigram_sample<-quadrigram_sample %>%
+        filter(!(word1 %in% toxic_words$term) & !str_detect(word1, '.*\\d.*'))%>%  
+        filter(!(word2 %in% toxic_words$term) & !str_detect(word2, '.*\\d.*')) %>%
+        filter(!(word3 %in% toxic_words$term) & !str_detect(word3, '.*\\d.*')) %>%
+  filter(!(word4 %in% toxic_words$term) & !str_detect(word4, '.*\\d.*')) 
+message('Filtering of quadrigram words with digits and toxic words complete')
+```
+
+```{r}
+quadrigram_sample<-quadrigram_sample %>%
+        mutate(word1=word1 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names(),
+               word2=word2 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names())
+
+quadrigram_sample <- quadrigram_sample %>%
+        filter(word1!='' & word2!='')
+
+message('Quadrigram internet slang & people name cleansing - Word1 and Word 2 complete')
+```
+
+```{r}
+gc()
+quadrigram_sample <-quadrigram_sample %>%
+        mutate(word3=word3 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names(), 
+                word4=word4 %>%
+                       replace_internet_slang(replacement ="") %>%
+                       replace_names())
+
+quadrigram_sample <- quadrigram_sample %>%
+        filter(word3!='' & word4!='')
+
+message('Quadrigram internet slang & people name cleansing - Word3 and Word4 complete')
+```
+
+```{r}
+
+gc()
+# Spellcheck
+
+spellcheck1<-hunspell_check(quadrigram_sample$word1, dict = dictionary("en_US"))
+quadrigram_sample <- quadrigram_sample %>%
+  filter(hunspell_check(quadrigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(quadrigram_sample$word2, dict = dictionary("en_US")))
+
+quadrigram_sample <- quadrigram_sample %>%
+  filter(hunspell_check(quadrigram_sample$word3, dict = dictionary("en_US")) & hunspell_check(quadrigram_sample$word4, dict = dictionary("en_US")))
+
+
+message('Quadrigram spellcheck complete')
+```
+
+```{r}
+gc()
+# Calculate term frequencies
+quadrigram_sample<- quadrigram_sample %>%
+        group_by(term) %>%
+        summarise(term_instances_in_sample=n()) %>%
+        ungroup()%>%
+        mutate(total=sum(term_instances_in_sample), term_freq=term_instances_in_sample/total) %>% 
+        arrange(by=desc(term_instances_in_sample)) %>%
+        separate(term, c("word1", "word2", "word3", "word4"), sep = " ", remove = FALSE)
+message ('Quadrigram term counts and frequencies calculated')
+nrow(quadrigram_sample)
+```
+
+```{r}
+quadrigram_sample<- quadrigram_sample %>%
+        arrange(by=desc(term_freq)) %>% # arrange by term frequency
+        mutate(rank = row_number(), # Add rank
+               cum_term_freq =cumsum(term_freq)) # Add cumulative term frequency
+message ('Cumulative term frequencies calculated')
+```
+
+```{r save_preprocessed_quadrigrams}
+target_path='intermediate/pre-processed/'
+dir.create(target_path)
+write_rds(x=quadrigram_sample, path=paste0(target_path,'quadrigrams_full.rds'), compress="gz")
+message('\nPre-processed quadrigrams saved')
+```
+
+## Print Summary Stats
+
+```{r}
+print_ndist_summary<-function(df, range){
+  ngram=sapply(gregexpr("[[:alpha:]]+", df[1,1]), function(x) sum(x > 0))
+  for (i in range){
+    print(paste0('Unique ',ngram,'-grams with more than ',i,' instances :',
+                nrow(filter(df,term_instances_in_sample>=i))))
+  }
+}
+```
+
+###Unigrams
+```{r}
+range<-c(0,seq(50,100, by=10))
+print_ndist_summary(word_sample, range)
+```
+
+###Bigrams
+```{r}
+print_ndist_summary(bigram_sample, range)
+```
+
+###Trigrams
+```{r}
+print_ndist_summary(trigram_sample, range)
+```
+
+###Quadrigrams
+```{r}
+print_ndist_summary(quadrigram_sample, range)
+```
+
+## Calculate Coverage
+
+```{r coverage_calc1, echo=FALSE}
+get_unique_term_no <- function(df){
+ return(c(which(df$cum_term_freq>=0.3)[1],which(df$cum_term_freq>=0.4)[1],which(df$cum_term_freq>=0.5)[1], which(df$cum_term_freq>=0.6)[1], which(df$cum_term_freq>=0.7)[1], which(df$cum_term_freq>=0.8)[1], which(df$cum_term_freq>=0.9)[1], which(df$cum_term_freq>=0.95)[1]))
+}
+
+data.frame(coverage=c('30%','40%','50%','60%','70%','80%','90%','95%'),
+      words=get_unique_term_no(word_sample),
+      bigrams=get_unique_term_no(bigram_sample),
+      trigrams=get_unique_term_no(trigram_sample),
+      quadrigrams=get_unique_term_no(quadrigram_sample))
+
+```
+It is clear from the above that obtaining a decent language coverage for bigrams, trigrams and quadrigrams will be difficult without large data sample. 
+
+Assuming maximum sequence matrix achievable without hitting memory limits is 30kx30k for a single object, we can provisionally suggest
+10k words - close to 100% coverage
+20k bigrams - 50% coverage
+30k trigrams and quadrigrams - that may not work well at all
+
+```{r coverage_calc2, echo=FALSE}
+
+get_coverage <- function(df, unique_ngrams){
+  print(round(filter(df, rank==unique_ngrams)$cum_term_freq, 4))
+  }
+  
+get_coverage(word_sample, 10000)
+get_coverage(bigram_sample, 20000)
+get_coverage(trigram_sample, 30000)
+get_coverage(quadrigram_sample, 30000)
+```
+
+## Prepare a Small Training Data Set To Support Development of Predictive Model
+
+```{r}
+target_path='intermediate/pre-processed-filtered/'
+dir.create(target_path)
+
+write_rds(x=filter(word_sample, rank<=10000), path=paste0(target_path,'unigrams_filtered.rds'), compress="gz")
+write_rds(x=filter(bigram_sample, rank<=10000), path=paste0(target_path,'bigrams_filtered.rds'), compress="gz")
+write_rds(x=filter(trigram_sample, rank<=10000), path=paste0(target_path,'trigrams_filtered.rds'), compress="gz")
+write_rds(x=filter(quadrigram_sample, rank<=10000), path=paste0(target_path,'quadrigrams_filtered.rds'), compress="gz")
+
+message('\nFiltered n-grams saved')
+```
