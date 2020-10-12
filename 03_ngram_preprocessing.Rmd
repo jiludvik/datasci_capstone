@@ -3,12 +3,23 @@ title: "Notebook 3. N-Gram Preprocessing"
 output: html_notebook
 ---
 
+``` {r}
+# Global parameters
+spellcheck=FALSE
+filter_stopwords=TRUE
+overall_sampling_rate=0.1 # Target sampling rate
+produce_quadrigrams=FALSE
+```
+
 ```{r dependencies}
 library(tidyverse)
 library(textclean)
 library(tidytext)
 library(hunspell)
+library(tictoc)
+tic()
 ```
+
 
 ## Load Full Raw Datasets
 Load data from twitter, news and weblogs adding a row number + load list of toxic words
@@ -23,9 +34,16 @@ for (filename in dir(input_path)) {
         head(rows[[i]])
 }
 toxic_words<-data.frame(term=read_lines('input/bad_words.txt'))
+
+stopwords<-read_csv('input/kaggle_stopwords.csv')
+colnames(stopwords)<-c('term')
+
+if (filter_stopwords) {
+  toxic_words<-rbind(toxic_words,stopwords)
+}
 ```
 
-## Split Fukk Datasets to Training and Test Sets
+## Split Datasets to Training and Test Sets
 
 Split raw data into test and train data set (70/30)
 
@@ -74,7 +92,6 @@ for (filename in dir(path=input_path, pattern="*train*")) {
 Sample training data from the full data sets into combine into a single data frame
 
 ```{r generate_row_sample}
-overall_sampling_rate=0.1 # Blended sampling rate from training data set
 set.seed(0)
 rows_sample=data.frame()
 #rows_sample_rate=c(0.007,0.01,0.02)/20
@@ -107,7 +124,6 @@ head(rows_clean)
 
 ```{r}
 rm(rows)
-rm(rows_split)
 rm(rows_sample)
 gc()
 ```
@@ -129,8 +145,10 @@ word_sample <- rows_clean %>%
         filter(term!='')
 
 # Spell-check words (split out of the previous pipeline to prevent some weird errors)
-word_sample<- word_sample%>% 
-        filter(hunspell_check(word_sample$term, dict = dictionary("en_US")))
+if (spellcheck) {
+  word_sample<- word_sample%>% 
+          filter(hunspell_check(word_sample$term, dict = dictionary("en_US")))
+}
 
 # Calculate term frequencies
 word_sample<- word_sample %>%
@@ -180,8 +198,10 @@ bigram_sample<- rows_clean %>%
 nrow(bigram_sample)
 
 # Spellcheck
-bigram_sample <- bigram_sample %>%
-  filter(hunspell_check(bigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(bigram_sample$word2, dict = dictionary("en_US"))) 
+if (spellcheck){
+  bigram_sample <- bigram_sample %>%
+    filter(hunspell_check(bigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(bigram_sample$word2, dict = dictionary("en_US"))) 
+}
 
 # Calculate term frequencies
 bigram_sample<- bigram_sample %>%
@@ -242,9 +262,11 @@ trigram_sample<-trigram_sample %>%
 message('Internet slang and people names filtering complete')
 
 # Spellcheck
-trigram_sample <- trigram_sample %>%
-  filter(hunspell_check(trigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(trigram_sample$word2, dict = dictionary("en_US")) & hunspell_check(trigram_sample$word3, dict = dictionary("en_US"))) 
-message('Spellcheck complete')
+if (spellcheck){
+  trigram_sample <- trigram_sample %>%
+    filter(hunspell_check(trigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(trigram_sample$word2, dict = dictionary("en_US")) & hunspell_check(trigram_sample$word3, dict = dictionary("en_US"))) 
+  message('Spellcheck complete')
+}
 ```
 
 ```{r}
@@ -277,25 +299,30 @@ message('\nPre-processed trigrams saved')
 
 ## Pre-Process Quadrigrams
 ```{r preprocess_quadrigrams}
-gc()
-set.seed(0)
-quadrigram_sample<- rows_clean %>% 
+if (produce_quadrigrams){
+  gc()
+  set.seed(0)
+  quadrigram_sample<- rows_clean %>% 
         unnest_tokens(input=value, output=term, token= "ngrams", n=4) %>%
         separate(term, c("word1", "word2", "word3", "word4"), sep = " ", remove = FALSE)
-message('Quadrigram tokenisation complete')
+  message('Quadrigram tokenisation complete')
+}
 ```
 
 ```{r}
-quadrigram_sample<-quadrigram_sample %>%
+if (produce_quadrigrams){
+  quadrigram_sample<-quadrigram_sample %>%
         filter(!(word1 %in% toxic_words$term) & !str_detect(word1, '.*\\d.*'))%>%  
         filter(!(word2 %in% toxic_words$term) & !str_detect(word2, '.*\\d.*')) %>%
         filter(!(word3 %in% toxic_words$term) & !str_detect(word3, '.*\\d.*')) %>%
-  filter(!(word4 %in% toxic_words$term) & !str_detect(word4, '.*\\d.*')) 
-message('Filtering of quadrigram words with digits and toxic words complete')
+        filter(!(word4 %in% toxic_words$term) & !str_detect(word4, '.*\\d.*')) 
+  message('Filtering of quadrigram words with digits and toxic words complete')
+}
 ```
 
 ```{r}
-quadrigram_sample<-quadrigram_sample %>%
+if (produce_quadrigrams){
+  quadrigram_sample<-quadrigram_sample %>%
         mutate(word1=word1 %>%
                        replace_internet_slang(replacement ="") %>%
                        replace_names(),
@@ -303,15 +330,17 @@ quadrigram_sample<-quadrigram_sample %>%
                        replace_internet_slang(replacement ="") %>%
                        replace_names())
 
-quadrigram_sample <- quadrigram_sample %>%
+  quadrigram_sample <- quadrigram_sample %>%
         filter(word1!='' & word2!='')
 
-message('Quadrigram internet slang & people name cleansing - Word1 and Word 2 complete')
+  message('Quadrigram internet slang & people name cleansing - Word1 and Word 2 complete')
+}
 ```
 
 ```{r}
-gc()
-quadrigram_sample <-quadrigram_sample %>%
+if (produce_quadrigrams){
+  gc()
+  quadrigram_sample <-quadrigram_sample %>%
         mutate(word3=word3 %>%
                        replace_internet_slang(replacement ="") %>%
                        replace_names(), 
@@ -319,55 +348,64 @@ quadrigram_sample <-quadrigram_sample %>%
                        replace_internet_slang(replacement ="") %>%
                        replace_names())
 
-quadrigram_sample <- quadrigram_sample %>%
+  quadrigram_sample <- quadrigram_sample %>%
         filter(word3!='' & word4!='')
 
-message('Quadrigram internet slang & people name cleansing - Word3 and Word4 complete')
+  message('Quadrigram internet slang & people name cleansing - Word3 and Word4 complete')
+}
 ```
 
 ```{r}
-
-gc()
-# Spellcheck
-
-spellcheck1<-hunspell_check(quadrigram_sample$word1, dict = dictionary("en_US"))
+if (produce_quadrigrams){
+  if (spellcheck){
+    gc()
+    # Spellcheck
+    spellcheck1<-hunspell_check(quadrigram_sample$word1, dict = dictionary("en_US"))
 quadrigram_sample <- quadrigram_sample %>%
-  filter(hunspell_check(quadrigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(quadrigram_sample$word2, dict = dictionary("en_US")))
+      filter(hunspell_check(quadrigram_sample$word1, dict = dictionary("en_US")) & hunspell_check(quadrigram_sample$word2, dict = dictionary("en_US")))
 
-quadrigram_sample <- quadrigram_sample %>%
-  filter(hunspell_check(quadrigram_sample$word3, dict = dictionary("en_US")) & hunspell_check(quadrigram_sample$word4, dict = dictionary("en_US")))
+    quadrigram_sample <- quadrigram_sample %>%
+      filter(hunspell_check(quadrigram_sample$word3, dict = dictionary("en_US")) & hunspell_check(quadrigram_sample$word4, dict = dictionary("en_US")))
 
 
-message('Quadrigram spellcheck complete')
+    message('Quadrigram spellcheck complete')
+  }
+}
 ```
 
 ```{r}
-gc()
-# Calculate term frequencies
-quadrigram_sample<- quadrigram_sample %>%
+if (produce_quadrigrams){
+  gc()
+  # Calculate term frequencies
+  quadrigram_sample<- quadrigram_sample %>%
         group_by(term) %>%
         summarise(term_instances_in_sample=n()) %>%
         ungroup()%>%
         mutate(total=sum(term_instances_in_sample), term_freq=term_instances_in_sample/total) %>% 
         arrange(by=desc(term_instances_in_sample)) %>%
         separate(term, c("word1", "word2", "word3", "word4"), sep = " ", remove = FALSE)
-message ('Quadrigram term counts and frequencies calculated')
-nrow(quadrigram_sample)
+  message ('Quadrigram term counts and frequencies calculated')
+  nrow(quadrigram_sample)
+}
 ```
 
 ```{r}
-quadrigram_sample<- quadrigram_sample %>%
+if (produce_quadrigrams){
+  quadrigram_sample<- quadrigram_sample %>%
         arrange(by=desc(term_freq)) %>% # arrange by term frequency
         mutate(rank = row_number(), # Add rank
                cum_term_freq =cumsum(term_freq)) # Add cumulative term frequency
-message ('Cumulative term frequencies calculated')
+  message ('Cumulative term frequencies calculated')
+}
 ```
 
 ```{r save_preprocessed_quadrigrams}
-target_path='intermediate/pre-processed/'
-dir.create(target_path)
-write_rds(x=quadrigram_sample, path=paste0(target_path,'quadrigrams_full.rds'), compress="gz")
-message('\nPre-processed quadrigrams saved')
+if (produce_quadrigrams){
+  target_path='intermediate/pre-processed/'
+  dir.create(target_path)
+  write_rds(x=quadrigram_sample, path=paste0(target_path,'quadrigrams_full.rds'), compress="gz")
+  message('\nPre-processed quadrigrams saved')
+}
 ```
 
 ## Print Summary Stats
@@ -400,7 +438,9 @@ print_ndist_summary(trigram_sample, range)
 
 ###Quadrigrams
 ```{r}
-print_ndist_summary(quadrigram_sample, range)
+if (produce_quadrigrams){
+  print_ndist_summary(quadrigram_sample, range)
+}
 ```
 
 ## Calculate Coverage
@@ -410,11 +450,18 @@ get_unique_term_no <- function(df){
  return(c(which(df$cum_term_freq>=0.3)[1],which(df$cum_term_freq>=0.4)[1],which(df$cum_term_freq>=0.5)[1], which(df$cum_term_freq>=0.6)[1], which(df$cum_term_freq>=0.7)[1], which(df$cum_term_freq>=0.8)[1], which(df$cum_term_freq>=0.9)[1], which(df$cum_term_freq>=0.95)[1]))
 }
 
-data.frame(coverage=c('30%','40%','50%','60%','70%','80%','90%','95%'),
+if (produce_quadrigrams){
+  data.frame(coverage=c('30%','40%','50%','60%','70%','80%','90%','95%'),
       words=get_unique_term_no(word_sample),
       bigrams=get_unique_term_no(bigram_sample),
       trigrams=get_unique_term_no(trigram_sample),
       quadrigrams=get_unique_term_no(quadrigram_sample))
+} else {
+  data.frame(coverage=c('30%','40%','50%','60%','70%','80%','90%','95%'),
+      words=get_unique_term_no(word_sample),
+      bigrams=get_unique_term_no(bigram_sample),
+      trigrams=get_unique_term_no(trigram_sample))
+}
 
 ```
 It is clear from the above that obtaining a decent language coverage for bigrams, trigrams and quadrigrams will be difficult without large data sample. 
@@ -433,19 +480,10 @@ get_coverage <- function(df, unique_ngrams){
 get_coverage(word_sample, 10000)
 get_coverage(bigram_sample, 20000)
 get_coverage(trigram_sample, 30000)
+
+if (produce_quadrigrams){
 get_coverage(quadrigram_sample, 30000)
+}
+toc()
 ```
 
-## Prepare a Small Training Data Set To Support Development of Predictive Model
-
-```{r}
-target_path='intermediate/pre-processed-filtered/'
-dir.create(target_path)
-
-write_rds(x=filter(word_sample, rank<=10000), path=paste0(target_path,'unigrams_filtered.rds'), compress="gz")
-write_rds(x=filter(bigram_sample, rank<=10000), path=paste0(target_path,'bigrams_filtered.rds'), compress="gz")
-write_rds(x=filter(trigram_sample, rank<=10000), path=paste0(target_path,'trigrams_filtered.rds'), compress="gz")
-write_rds(x=filter(quadrigram_sample, rank<=10000), path=paste0(target_path,'quadrigrams_filtered.rds'), compress="gz")
-
-message('\nFiltered n-grams saved')
-```
