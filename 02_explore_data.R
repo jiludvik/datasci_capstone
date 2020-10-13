@@ -7,6 +7,8 @@ library(tidyr) # bigram separation
 library(igraph) # transformation of bigrams to directional graphs
 library(ggplot2) # frequency and barplots
 library(ggraph) # generation of network graph visuals
+library (gridExtra)
+
 
 # 1. LOAD AND PRE-PROCESS FULL RAW DATA SETS
 
@@ -17,7 +19,7 @@ load_data<-function(filepath,filename,n_max=-1){
   return(df)
 }
 
-# 1.1 Load and pre-process reference data sets
+# 1.1 Load reference data sets
 setwd('~/Documents/data_science_jhu/10_capstone')
 # Load google's toxic word list https://raw.githubusercontent.com/jiludvik/Google-profanity-words/master/list.txt
 google_toxic_words<-read_lines('input/bad_words.txt')
@@ -36,15 +38,15 @@ for (filename in dir(input_path)) {
   i=i+1
   message('Loading ',filename,'...')
   rows[[i]]<-load_data(input_path,filename)
-  message('...Splitting rows into words...')
-  words[[i]]<- rows[[i]] %>%
-    unnest_tokens(output=word, input=value, token= "words")
-  message('...Splitting rows into sentences...')
-  sentences[[i]] <- rows[[i]] %>%
-    unnest_tokens(output=sentence, input=value, token= "sentences")
-  message('...Calculating row lengths...')
-  rows[[i]] <- rows[[i]] %>%
-    mutate(row_len=nchar(value))
+#  message('...Splitting rows into words...')
+#  words[[i]]<- rows[[i]] %>%
+#    unnest_tokens(output=word, input=value, token= "words")
+#  message('...Splitting rows into sentences...')
+#  sentences[[i]] <- rows[[i]] %>%
+#    unnest_tokens(output=sentence, input=value, token= "sentences")
+#  message('...Calculating row lengths...')
+#  rows[[i]] <- rows[[i]] %>%
+#    mutate(row_len=nchar(value))
 }
 
 #2. HEADLINE DESCRIPTIVE STATISTICS
@@ -85,8 +87,9 @@ row_sample=data.frame()
 set.seed(0)
 sampling_factor=c(0.7,1,5) # Adjusts sample proportions to arrive at comparable number of unique words per data set
 for (i in 1:3) {
-  row_sample<- rbind(row_sample, sample_n(rows[[i]],sampling_factor[i]*50000))
+  row_sample<- rbind(row_sample, sample_n(rows[[i]],sampling_factor[i]*20000))
 }
+
 row_sample<-row_sample %>% 
   filter (nchar(value)>5) %>% # filter out rows <5 characters long
   mutate(source=recode(source, # make source names human readable
@@ -185,17 +188,43 @@ word_sample %>%
 
 # 3.6 Word coverage
 #How many unique words do you need in a frequency sorted dictionary to cover 50% of all word instances in the language? 90%?
+
 word_sample <- word_sample %>% 
   group_by(source) %>% 
-  mutate(rank = row_number(), term_freq = n/total, cum_term_freq =cumsum(term_freq))
+  mutate(term_freq = n/total) %>%
+  arrange(by=term_freq) %>%
+  mutate(rank = row_number(), cum_term_freq =cumsum(term_freq))
 
-ggplot(word_sample, aes(y=rank, x=cum_term_freq*100, colour = source)) +
+p1<- ggplot(word_sample, aes(y=rank, x=cum_term_freq*100, colour = source)) +
   geom_line(size = 1.1, alpha = 0.8) +   
   scale_y_log10() + 
   geom_vline(xintercept = c(50,90), colour="grey", linetype = "longdash") +
-  labs(x = 'Target coverage', y = "Req'd unique words")
+  labs(x = 'Target coverage', y = "Unique terms required") +
+  ggtitle('Word Coverage')
+
+p2<- ggplot(bigram_sample, aes(y=rank, x=cum_term_freq*100, colour = source)) +
+  geom_line(size = 1.1, alpha = 0.8) +   
+  scale_y_log10() + 
+  geom_vline(xintercept = c(50,90), colour="grey", linetype = "longdash") +
+  labs(x = 'Target coverage', y = "Unique terms required") +
+  ggtitle('Bi-Gram Coverage')
+
+p3<- ggplot(trigram_sample, aes(y=rank, x=cum_term_freq*100, colour = source)) +
+  geom_line(size = 1.1, alpha = 0.8) +   
+  scale_y_log10() + 
+  geom_vline(xintercept = c(50,90), colour="grey", linetype = "longdash") +
+  labs(x = 'Target coverage', y = "Unique terms required") +
+  ggtitle('Tri-Gram Coverage')
+
+grid.arrange(p1, p2, p3, nrow = 1)
 
 #How many unique words are required for 50% coverage of all words in the corpus
+
+term_coverage <- function(df){
+  df %>% group_by(source) %>%
+  summarise (t50=which(cum_term_freq>=0.5)[1], t90=which(cum_term_freq>=0.9)[1])
+}
+
 uniquewords_coverage_50pct<-word_sample %>% group_by(source) %>% summarise(unique_words_reqd=which(cum_term_freq>=0.5)[1])
 print(uniquewords_coverage_50pct)
 
