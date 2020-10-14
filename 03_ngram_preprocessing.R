@@ -5,7 +5,7 @@ library(tidytext)
 library(hunspell)
 library(tictoc)
 
-## Supporting Functions
+## SUPPORTING FUNCTIONS
 
 ### LOAD_SOURCE_DATA: Function to load source data from a specificed directory
 load_source_data<-function(input_path){
@@ -84,12 +84,14 @@ generate_unigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descriptive_
     word_sample<- word_sample %>%
       filter (!str_detect(term, '.*\\d.*'))%>% # drop words with digits
       filter (!(str_detect(term, '_'))) %>% # drop words with _
-      anti_join(y=stopwords, by="term") %>% # drop profanities
+      anti_join(y=stopwords, by="term") # drop profanities
+    message('...Removal of stopwords and words with digits complete')
+    word_sample<-word_sample%>%  
       mutate(term=term %>%
                replace_internet_slang(replacement ="") %>%
                replace_names()) %>%
       filter(term!='')
-    message('...Removal of stopwords, words with digits, internet slang and peoples names complete')
+    message('...Removal of internet slang words and peoples names complete')
     # Spell-check words
     if (spellcheck) {
       word_sample<- word_sample%>% 
@@ -135,7 +137,7 @@ generate_bigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descriptive_s
                replace_internet_slang(replacement ="") %>%
                replace_names()) %>%
       filter(word1!='' & word2!='')
-    message('...Removal of stopwords, words with digits, internet slang, people names complete')
+    message('...Removal of stopwords, words with digits, internet slang words and peoples names complete')
     
     if (spellcheck){
       bigram_sample <- bigram_sample %>%
@@ -194,7 +196,7 @@ generate_trigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descriptive_
                replace_internet_slang(replacement ="") %>%
                replace_names()) %>%
       filter(word1!='' & word2!='' & word3!='')
-    message('...Removal of internet slang and people names complete')
+    message('...Removal of internet slang words and people names complete')
     if (spellcheck){
       trigram_sample <- trigram_sample %>%
         filter(hunspell_check(trigram_sample$word1, dict = dictionary("en_US")))
@@ -268,7 +270,7 @@ generate_quadrigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descripti
     quadrigram_sample <- quadrigram_sample %>%
       filter(word3!='' & word4!='')
     gc()
-    message('...Removal of internet slang & people names complete')
+    message('...Removal of internet slang words and people names complete')
     if (spellcheck){
       quadrigram_sample <- quadrigram_sample %>%
         filter(hunspell_check(quadrigram_sample$word1, dict = dictionary("en_US")))
@@ -417,7 +419,7 @@ kaggle_stopwords<-read_csv('input/kaggle_stopwords.csv')
 colnames(kaggle_stopwords)<-c('term')
 
 # Sample rows to reduce the size of data requiring processing
-source_data_sample<-sample_rows(source=source_data, target_sample_rate=0.1)
+source_data_sample<-sample_rows(source=source_data, target_sample_rate=0.01)
 
 # Split source data into training, validation and test data set
 source_data_split<-split_testtrain(source_data_sample, c(0.9,0.05,0.05))
@@ -438,35 +440,42 @@ write_rds(valid_rows_clean, paste0(clean_path, 'validation_rows_sample.rds'), "g
 
 # Free up memory
 rm(source_data); rm(source_data_split)
-rm(train_rows); rm(train_rows_sample)
-rm(test_rows); rm(test_rows_sample)
-rm(valid_rows); rm(valid_rows_sample)
+rm(train_rows_sample); rm(test_rows_sample); rm(valid_rows_sample)
 gc()
 
 ## Generate test and training ngrams
 
 # Dataset 1 (Baseline): no spellcheck + stopwords included 
 train_ngram_nospell_stop<-generate_train_ngrams(source=train_rows_clean, spellcheck=FALSE, descriptive_stats = TRUE, stopwords=toxic_words)
-write_rds(x=train_ngram_nospell_stop, path=paste0(target_path,'train_ngrams_nospell_stop.rds'), compress="gz")
 test_ngrams_nospell_stop<-generate_test_ngrams(source=test_rows_clean, spellcheck=FALSE, stopwords=toxic_words)
-write_rds(x=test_ngrams_nospell_stop, path=paste0(target_path,'test_ngrams_nospell_stop.rds'), compress="gz")
 valid_ngrams_nospell_stop<-generate_test_ngrams(source=valid_rows_clean, spellcheck=FALSE, stopwords=toxic_words)
+write_rds(train_ngram_nospell_stop, paste0(target_path,'train_ngrams_nospell_stop.rds'), "gz")
+write_rds(test_ngrams_nospell_stop, paste0(target_path,'test_ngrams_nospell_stop.rds'), "gz")
+write_rds(valid_ngrams_nospell_stop, paste0(target_path,'validation_ngrams_nospell_stop.rds'), "gz")
 
+#FINISHED HERE
 
 # Dataset 2: spellcheck + stopwords included
 train_ngram_spell_stop<-generate_train_ngrams(source=train_rows_clean, spellcheck=TRUE, descriptive_stats = TRUE, stopwords=toxic_words)
-write_rds(x=train_ngram_spell_stop, path=paste0(target_path,'train_ngrams_spell_stop.rds'), compress="gz")
 test_ngrams_spell_stop<-generate_test_ngrams(source=test_rows_clean, spellcheck=TRUE, stopwords=toxic_words)
-write_rds(x=test_ngrams_spell_stop, path=paste0(target_path,'test_ngrams_spell_stop.rds'), compress="gz")
+valid_ngrams_spell_stop<-generate_test_ngrams(source=valid_rows_clean, spellcheck=TRUE, stopwords=toxic_words)
+write_rds(train_ngram_spell_stop, paste0(target_path,'train_ngrams_spell_stop.rds'), "gz")
+write_rds(test_ngrams_spell_stop, paste0(target_path,'test_ngrams_spell_stop.rds'), "gz")
+write_rds(valid_ngrams_spell_stop, paste0(target_path,'validation_ngrams_spell_stop.rds'), "gz")
 
 # Dataset 3: no spellcheck + stopwords excluded
 train_ngram_nospell_nostop<-generate_train_ngrams(source=train_rows_clean,spellcheck=FALSE, descriptive_stats = TRUE, stopwords=rbind(toxic_words, kaggle_stopwords))
-write_rds(x=train_ngram_nospell_nostop, path=paste0(target_path,'train_ngrams_nospell_nostop.rds'), compress="gz")
 test_ngrams_nospell_nostop<-generate_test_ngrams(source=test_rows_clean, spellcheck=FALSE, stopwords=rbind(toxic_words, kaggle_stopwords))        
-write_rds(x=test_ngrams_nospell_nostop, path=paste0(target_path,'test_ngrams_nospell_nostop.rds'), compress="gz")
+valid_ngrams_nospell_nostop<-generate_test_ngrams(source=valid_rows_clean, spellcheck=FALSE, stopwords=rbind(toxic_words, kaggle_stopwords))        
+write_rds(train_ngram_nospell_nostop, paste0(target_path,'train_ngrams_nospell_nostop.rds'), "gz")
+write_rds(test_ngrams_nospell_nostop, paste0(target_path,'test_ngrams_nospell_nostop.rds'), "gz")
+write_rds(valid_ngrams_nospell_nostop, paste0(target_path,'validation_ngrams_nospell_nostop.rds'), "gz")
 
 # Dataset 4: spellcheck + stopwords excluded
 train_ngram_spell_nostop<-generate_train_ngrams(source=train_rows_clean, spellcheck=TRUE, descriptive_stats = TRUE, stopwords=rbind(toxic_words, kaggle_stopwords))
-write_rds(x=train_ngram_spell_nostop, path=paste0(target_path,'train_ngrams_spell_nostop.rds'), compress="gz")
 test_ngrams_spell_nostop<-generate_test_ngrams(source=test_rows_clean, spellcheck=TRUE, stopwords=rbind(toxic_words, kaggle_stopwords))        
-write_rds(x=test_ngrams_spell_nostop, path=paste0(target_path,'test_ngrams_spell_nostop.rds'), compress="gz")
+valid_ngrams_spell_nostop<-generate_test_ngrams(source=valid_rows_clean, spellcheck=TRUE, stopwords=rbind(toxic_words, kaggle_stopwords))        
+
+write_rds(train_ngram_spell_nostop, paste0(target_path,'train_ngrams_spell_nostop.rds'), "gz")
+write_rds(test_ngrams_spell_nostop, paste0(target_path,'test_ngrams_spell_nostop.rds'), "gz")
+write_rds(valid_ngrams_spell_nostop, paste0(target_path,'validation_ngrams_spell_nostop.rds'), "gz")
