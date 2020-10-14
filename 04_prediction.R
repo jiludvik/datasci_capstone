@@ -1,7 +1,5 @@
 #Dependencies
 
-#require(readtext)
-#require(quanteda)
 require(data.table)
 require(stringi)
 require(stringr)
@@ -9,78 +7,38 @@ library(tokenizers)
 library(textclean)
 library(readr)
 
-#Global Options
-input_path='intermediate/pre-processed/'
-min_count=4 # minimum count
-sample_reduction_rate=1
-toxic_words<-read_lines('input/bad_words.txt')
 
-## Load  Training Data
+# FUNCTIONS A. Good-Turing Pre-Processing
 
-train_uni<-read_rds(paste0 (input_path, 'train_unigrams_nostopwords.rds')) %>% rename(c=term_instances_in_sample) %>% select(term, c) %>% filter(c>min_count) %>% sample_frac(sample_reduction_rate)
-train_bi<-read_rds(paste0 (input_path, 'train_bigrams_nostopwords.rds')) %>% rename(c=term_instances_in_sample) %>% select(term, c) %>% filter(c>min_count) %>% sample_frac(sample_reduction_rate)
-train_tri<-read_rds(paste0 (input_path, 'train_trigrams_nostopwords.rds')) %>% rename(c=term_instances_in_sample) %>% select(term, c) %>% filter(c>min_count) %>% sample_frac(sample_reduction_rate)
-# transform spaces in terms to underscore (req'd by prediction algo)
-train_bi <- train_bi %>% mutate (term=gsub(" ", "_", term))
-train_tri <- train_tri %>% mutate (term=gsub(" ", "_", term))
-
-UniFreq<-data.table(train_uni)
-BiFreq<-data.table(train_bi)
-TriFreq<-data.table(train_tri)
-
-
-# Good-Turing
-
-## Calculates the "frequency of frequency r" (N_r)
+## COUNTNC: Function to calculate  "frequency of frequency r" (N_r)
 CountNC <- function(FreqVec) {
         CountTbl <- table(FreqVec[,.(c)])
         return(data.table(cbind(c=as.integer(names(CountTbl)), Nr=as.integer(CountTbl))))
 }
 
-UniBins <- CountNC(UniFreq)
-BiBins <- CountNC(BiFreq)
-TriBins <- CountNC(TriFreq)
-
-
-
-# Average non-zero count, replace N_r with Z_r
+# AVG.ZR: Average non-zero count, replace N_r with Z_r
 avg.zr <- function(Bins) {
         max <- dim(Bins)[1]
         r<-2:(max-1)
         Bins[1, Zr:=2*Nr/Bins[2,c]]  # r=1, q=0, Zr=Nr/(0.5t)
         Bins[r, Zr:=2*Nr/(Bins[r+1,c]-Bins[r-1,c])]  # else, Zr=Nr/(0.5(t-q))
         Bins[max, Zr:=Nr/(c-Bins[(max-1),c])]  # r=max, t=2r-q, Zr=Nr/(r-q)
+        return(Bins)
 }
 
-avg.zr(UniBins)
-avg.zr(BiBins)
-avg.zr(TriBins)
-
-
-#Fit a linear regression model log(Z_r)=a+b*log(r)
+#FITLM: Function to fits a linear regression model log(Z_r)=a+b*log(r)
 
 ## Replace Z_r with value computed from a linear regression that is fit to map Z_r to c in log space
 ## log(Z_r) = a + b*log(c)
 FitLM <- function(CountTbl) {
         return(lm(log(Zr) ~ log(c), data = CountTbl))
 }
-UniLM <- FitLM(UniBins)
-BiLM <- FitLM(BiBins)
-TriLM <- FitLM(TriBins)
 
+#CAL_GTDISCOUNT: Functions to calculate GT discount for small counts
+#count (c) n-grams, where c <= k, using Katz's formula
+# invoked by UpdateCount
 
-#Perform the discounting to small count (c) n-grams, where c <= k, using Katz's formula
-
-k=5
-Cal_GTDiscount <- function(cnt, N) {
-        if (N==1) {
-                model <- UniLM
-        } else if (N==2) {
-                model <- BiLM
-        } else if (N==3) {
-                model <- TriLM
-        }
-        # Common parts
+Cal_GTDiscount <- function(cnt, model, k) {
         Z1 <- exp(predict(model, newdata=data.frame(c=1)))
         Zr <- exp(predict(model, newdata=data.frame(c=cnt)))
         Zrp1 <- exp(predict(model, newdata=data.frame(c=(cnt+1))))
@@ -91,42 +49,63 @@ Cal_GTDiscount <- function(cnt, N) {
         return(new_r)
 }
 
-UpdateCount <- function(FreqTbl, N) {
+#UPDATECOUNT: Function to update GT discount to the table 
+UpdateCount <- function(FreqTbl, model, k=5) {
         FreqTbl[c>k ,cDis:=as.numeric(c)]
-        FreqTbl[c<=k, cDis:=Cal_GTDiscount(c, N)]
+        FreqTbl[c<=k, cDis:=Cal_GTDiscount(c, model, k)]
+        return(FreqTbl)
 }
-UpdateCount(UniFreq, 1)
-UpdateCount(BiFreq, 2)
-UpdateCount(TriFreq, 3)
-setkey(UniFreq, term)
-setkey(BiFreq, term)
-setkey(TriFreq, term)
 
 
-## N-Grams Preparation Functions
+## GOOD_TURING_PREPROC: Function orchestrates Good-Turing preprocessing
+good_turing_preproc<-function(corpus, min_count=4, k=5){
+        
+        NgramBins<-list()
+        NgramLM<-list()
+        
+        for (i in 1:3){
+                # Tidy up corpus data
+                corpus[[i]]<-corpus[[i]] %>% 
+                        rename(c=term_instances_in_sample) %>% 
+                        select(term, c) %>% 
+                        filter(c>min_count) %>% 
+                        mutate (term=gsub(" ", "_", term)) %>% 
+                        data.table()
+                # Calculate the frequency of frequency
+                NgramBins[[i]] <- CountNC(corpus[[i]])
+                # Average non-zero count, replace N_r with Z_r
+                NgramBins[[i]]<-avg.zr(NgramBins[[i]])
+                #Fit a linear regression model log(Z_r)=a+b*log(r)
+                NgramLM[[i]] <- FitLM(NgramBins[[i]])
+                #Perform the discounting to small count (c) n-grams, where c <= k, using Katz's formula
+                corpus[[i]]<- UpdateCount(corpus[[i]], NgramLM[[i]], k=k)
+                #corpus[[i]]<-data.table(corpus[[i]])
+                # set term as the key
+                setkey(corpus[[i]], term)
+        }
+        return(corpus)
+}
 
-# Function to retrieve observed N-grams from (N−1)-gram
+## PART 2: WORD PREDICTION
 
+# GET.OBS.NGRAMS.BY.PRE: Function to retrieve observed N-grams from (N−1)-gram
 ## Return all the observed N-grams given the previous (N-1)-gram
-##
 ## - wordseq: character vector of (N-1)-gram separated by underscore, e.g. "x1_x2_..._x(N-1)"
 ## - NgramFreq: datatable of N-grams
-get.obs.NGrams.by.pre <- function(wordseq, NgramFreq) {
+get.obs.NGrams.by.pre <- function(wordseq, FreqTbl) {
+        #browser()
         PreTxt <- sprintf("%s%s%s", "^", wordseq, "_")
-        NgramFreq[grep(PreTxt, NgramFreq[,term], perl=T, useBytes=T),]
+        FreqTbl[grep(PreTxt, FreqTbl[,term], perl=T, useBytes=T),]
 }
 
-# Function to retrieve all the unigrams that end unobserved N-grams
-
-## Return all the unigrams that end unobserved Ngrams
-get.unobs.Ngram.tails <- function(ObsNgrams, N) {
+# GET.UNOBS.NGRAM.TAILS: Function to retrieve all the unigrams that end unobserved N-grams
+get.unobs.Ngram.tails <- function(ObsNgrams, N, UniFreq) {
         ObsTails <- str_split_fixed(ObsNgrams[,term], "_", N)[,N]
         return(data.table(term=UniFreq[!ObsTails,term,on="term"]))
 }
 
 
-# Function to compute the probabilities of observed N-grams
-
+#CAL.OBS.PROB: Function to compute the probabilities of observed N-grams
 ## Compute the probabilities of observed N-gram.
 ## We need the counts from (N-1)-gram table since corpus doesn't include <EOS> explicitly,
 ## therefore the denominator will be smaller if only summing up all the terms
@@ -137,7 +116,7 @@ cal.obs.prob <- function(ObsNgrams, Nm1Grams, wordseq) {
 }
 
 
-## Function to compute Alpha
+##CAL.ALPHA: Function to compute Alpha
 ## Return the normalization factor Alpha
 ##
 ## - ObsNgrams: datatable contains all observed ngrams starting with wordseq
@@ -152,38 +131,38 @@ cal.alpha <- function(ObsNGrams, Nm1Grams, wordseq) {
         }
 }
 
-# Function to find next word
+# FIND_NEXT_WORD: Function to find next word
 
 ## Return a list of predicted next words according to previous 2 user input words
 ##
 ## - xy: character vector containing user-input bigram, separated by a space
 ## - words_num: number of candidates of next words returned
-Find_Next_word <- function(xy, words_num) {
+Find_Next_word <- function(xy, words_num, corpus) {
         xy <- gsub(" ", "_", xy)
-        debug<-which(BiFreq$term == xy)
-        if (length(which(BiFreq$term == xy)) > 0) {  # C(x,y) > 0
+        #browser()
+        if (length(which(corpus[[2]]$term == xy)) > 0) {  # C(x,y) > 0
                 ## N-grams preparation
                 # Retrieve all observed trigrams beginning with xy: OT
-                ObsTriG <- get.obs.NGrams.by.pre(xy, TriFreq)
+                ObsTriG <- get.obs.NGrams.by.pre(xy, corpus[[3]])
                 y <- str_split_fixed(xy,"_", 2)[,2]
                 # Retrieve all observed bigrams beginning with y: OB
-                ObsBiG <- get.obs.NGrams.by.pre(y, BiFreq)
+                ObsBiG <- get.obs.NGrams.by.pre(y, corpus[[2]])
                 # Retrieve all unigrams end the unobserved bigrams UOBT: z where C(y,z) = 0, UOB in UOT
-                UnObsBiTails <- get.unobs.Ngram.tails(ObsBiG, 2)
+                UnObsBiTails <- get.unobs.Ngram.tails(ObsBiG, 2, corpus[[1]])
                 # Exclude observed bigrams that also appear in observed trigrams: OB in UOT
                 ObsBiG <- ObsBiG[!str_split_fixed(ObsTriG[,term], "_", 2)[,2], on="term"]
                 
                 ## Calculation part
                 # Calculate probabilities of all observed trigrams: P^*(z|x,y)
-                ObsTriG <- cal.obs.prob(ObsTriG, BiFreq, xy)
+                ObsTriG <- cal.obs.prob(ObsTriG, corpus[[2]], xy)
                 # Calculate Alpha(x,y)
-                Alpha_xy <- cal.alpha(ObsTriG, BiFreq, xy)
+                Alpha_xy <- cal.alpha(ObsTriG, corpus[[2]], xy)
                 # Calculate probabilities of all observed bigrams: P^*(z|y), (y,z) in UOT
-                ObsBiG <- cal.obs.prob(ObsBiG, UniFreq, y)
+                ObsBiG <- cal.obs.prob(ObsBiG, corpus[[1]], y)
                 # Calculate Alpha(y)
-                Alpha_y <- cal.alpha(ObsBiG, UniFreq, y)
+                Alpha_y <- cal.alpha(ObsBiG, corpus[[1]], y)
                 # Calculate P_{ML}(z), where c(y,z) in UOB: Alpha_y * P_{ML}(z)
-                UnObsBiTails[, Prob:=UniFreq[UnObsBiTails, c, on=.(term)]/UniFreq[UnObsBiTails, sum(c), on=.(term)]]
+                UnObsBiTails[, Prob:=corpus[[1]][UnObsBiTails, c, on=.(term)]/corpus[[1]][UnObsBiTails, sum(c), on=.(term)]]
                 UnObsBiTails[, Prob:=Alpha_xy*Alpha_y*Prob]
                 # Remove unused column in ObsTriG and ObsBiG
                 ObsTriG[, c("c", "cDis"):=NULL]
@@ -198,18 +177,17 @@ Find_Next_word <- function(xy, words_num) {
         } else {  # C(x,y) = 0
                 y <- str_split_fixed(xy,"_", 2)[,2]
                 # c(y>0)
-                debug<-which(UniFreq$term == y)
-                if (length(which(UniFreq$term == y)) > 0) {
+                if (length(which(corpus[[1]]$term == y)) > 0) {
                         # Retrieve all observed bigrams beginning with y: OB
-                        ObsBiG <- get.obs.NGrams.by.pre(y, BiFreq)
+                        ObsBiG <- get.obs.NGrams.by.pre(y, corpus[[2]])
                         # Calculate probabilities of all observed bigrams: P^*(z|y)
-                        ObsBiG <- cal.obs.prob(ObsBiG, UniFreq, y)
+                        ObsBiG <- cal.obs.prob(ObsBiG, corus[[1]], y)
                         # Calculate Alpha(y)
-                        Alpha_y <- cal.alpha(ObsBiG, UniFreq, y)
+                        Alpha_y <- cal.alpha(ObsBiG, corpus[[1]], y)
                         # Retrieve all unigrams end the unobserved bigrams UOBT: z where C(y,z) = 0
-                        UnObsBiTails <- get.unobs.Ngram.tails(ObsBiG, 2)
+                        UnObsBiTails <- get.unobs.Ngram.tails(ObsBiG, 2, corpus[[1]])
                         # Calculate P_{ML}(z), where c(y,z) in UOB: Alpha_y * P_{ML}(z)
-                        UnObsBiTails[, Prob:=UniFreq[UnObsBiTails, c, on=.(term)]/UniFreq[UnObsBiTails, sum(c), on=.(term)]]
+                        UnObsBiTails[, Prob:=corpus[[1]][UnObsBiTails, c, on=.(term)]/corpus[[1]][UnObsBiTails, sum(c), on=.(term)]]
                         UnObsBiTails[, Prob:=Alpha_y*Prob]
                         # Remove unused column in ObsBiG
                         ObsBiG[, c("c", "cDis"):=NULL]
@@ -218,15 +196,15 @@ Find_Next_word <- function(xy, words_num) {
                         return(AllBiG[Prob!=0][1:words_num])
                 } else {  # c(y=0)
                         # P^*z
-                        return(setorder(UniFreq, -cDis)[1:words_num,.(term, Prob=cDis/UniFreq[,sum(c)])])  
+                        return(setorder(corpus[[1]], -cDis)[1:words_num,.(term, Prob=cDis/corpus[[1]][,sum(c)])])  
                 }
         }
 }
 
-##The Result
 
-## Remove elements not being used by prediction model
-Preprocess <- function(wordseq) {
+## USER_INPUT_PREPROC: Real-time preprocessing of user input
+# cleans up user input and splits it into words, returns last two words
+user_input_preproc <- function(wordseq) {
         names(wordseq) <- NULL
         quest <- replace_hash(wordseq)
         quest<-replace_tag(quest)
@@ -241,28 +219,41 @@ Preprocess <- function(wordseq) {
 }
 
 ## Interface to preprocess text and request prediction
-Next_word <- function(prephrase, words_num=5) {
-        bigr <- Preprocess(prephrase)
-        result <- Find_Next_word(bigr, words_num)
+next_word <- function(prephrase, words_num=5, corpus) {
+        #browser()
+        bigr <- user_input_preproc(prephrase)
+        result <- Find_Next_word(bigr, words_num, corpus)
         if (dim(result)[1] == 0) {
-                rbind(result, list("<Please input more text>", 1))
+                rbind(result, list("<Enter more text>", 1))
         }
         return(result)
 }
 
-# Predict next word
-Next_word("He likes to eat ice")
-Next_word("On Mondays he likes to play a game of")
-Next_word ("He went the other")
-Next_word ("Where are you")
-Next_word ("At what time are you going to")
-Next_word ("Laughing out")
-Next_word ("New car")
 
-## Issue, if a single word is not recognised system returns stopwords. Probably not an issue for accuracy of the prediction but probably for usability.
+### BODY OF THE SCRIPT
 
-# 
-test<-read_rds(paste0(input_path,'test_ngrams_nostopwords.rds'))
+#Global Options
+input_path='intermediate/pre-processed/'
+toxic_words<-read_lines('input/bad_words.txt')
+
+
+## Load  Training Data
+NgramFreq<-read_rds(paste0 (input_path, 'train_ngrams_nospell_stop.rds'))
+
+# Calculate discounted term count, using Good-Turing
+NgramFreq<-good_turing_preproc(corpus=NgramFreq, min_count = 4, k=5)
+
+# Functional Test
+next_word("He likes to eat ice", corpus=NgramFreq)
+next_word("On Mondays he likes to play a game of", corpus=NgramFreq)
+next_word ("He went the other", corpus=NgramFreq)
+next_word ("Where are you", corpus=NgramFreq)
+next_word ("At what time are you going to", corpus=NgramFreq)
+next_word ("Laughing out", corpus=NgramFreq)
+next_word ("New car", corpus=NgramFreq)
+
+# Calculate accuracy
+test<-read_rds(paste0(input_path,'test_ngrams_nospell_stop.rds'))
 
 test_sample<-test%>%sample_n(5000)
 tic()
@@ -272,4 +263,3 @@ for (x in test_sample$predictor) {
 }
 toc()
 accuracy<-sum(y==test_sample$response)/length(y)
-
