@@ -7,7 +7,7 @@ library(tictoc)
 
 ## SUPPORTING FUNCTIONS
 
-### LOAD_SOURCE_DATA: Function to load source data from a specificed directory
+### LOAD_SOURCE_DATA: Function to load source data from a specified directory
 load_source_data<-function(input_path){
         rows=list(); i=0
         for (filename in dir(input_path)) {
@@ -55,22 +55,26 @@ split_testtrain<-function(source, split_rate=c(0.6,0.2,0.2)){
 preclean_rows<-function(source){
         rows_clean<-source %>% 
                 mutate(value=value%>%
-                               replace_white() %>%
-                               replace_hash() %>%
-                               replace_tag() %>%
-                               replace_url(replacement = "") %>%
-                               str_remove_all(pattern = "(?![.,!])[[:punct:]]") %>% 
-                               str_remove_all(pattern = "[0-9]") %>%
-                               str_replace_all(pattern = "[.]", replacement = " .") %>% 
-                               str_replace_all(pattern = "[!]", replacement = " !") %>% 
-                               str_replace_all(pattern = "[,]", replacement = " ,") %>%
-                               replace_contraction() %>%
-                               replace_word_elongation()) %>%
+                         replace_hash() %>%
+                         replace_tag() %>%
+                         replace_url(replacement = "") %>%
+                         str_remove_all(pattern = "(?![.,!])[[:punct:]]") %>% 
+                         str_remove_all(pattern = "[0-9]") %>%
+                         str_replace_all(pattern = "[.]", replacement = " .") %>% 
+                         str_replace_all(pattern = "[!]", replacement = " !") %>% 
+                         str_replace_all(pattern = "[,]", replacement = " ,") %>%
+                         replace_contraction() %>%
+                         replace_word_elongation() %>%
+                         replace_internet_slang(replacement ="") %>%
+                         replace_names() %>%
+                         str_replace_all(pattern = "\\<.*\\d\\.*\\>", replacement = " ,")%>%
+                         replace_white()) %>%
                 filter(value!='' | !is.na(value))
-        head(rows_clean)
+        message('Rows pre-cleaning complete')
         return(rows_clean)
 }
 
+clean<- preclean_rows(source_data_sample)
 
 ### GENERATE_UNIGRAMS: Function to generate unigrams and their statistics
 generate_unigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descriptive_stats=FALSE, stopwords=NULL){
@@ -82,16 +86,8 @@ generate_unigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descriptive_
   message('...Tokenisation complete')
   if (cleanse){
     word_sample<- word_sample %>%
-      filter (!str_detect(term, '.*\\d.*'))%>% # drop words with digits
-      filter (!(str_detect(term, '_'))) %>% # drop words with _
       anti_join(y=stopwords, by="term") # drop profanities
-    message('...Removal of stopwords and words with digits complete')
-    word_sample<-word_sample%>%  
-      mutate(term=term %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names()) %>%
-      filter(term!='')
-    message('...Removal of internet slang words and peoples names complete')
+    message('...Removal of stopwords complete')
     # Spell-check words
     if (spellcheck) {
       word_sample<- word_sample%>% 
@@ -128,16 +124,9 @@ generate_bigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descriptive_s
   message('...Tokenisation complete')
   if (cleanse){
     bigram_sample<- bigram_sample%>%
-      filter(!(word1 %in% stopwords$term) & !str_detect(word1, '.*\\d.*'))%>%  
-      filter(!(word2 %in% stopwords$term) & !str_detect(word2, '.*\\d.*')) %>%
-      mutate(word1=word1 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names(),
-             word2=word2 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names()) %>%
-      filter(word1!='' & word2!='')
-    message('...Removal of stopwords, words with digits, internet slang words and peoples names complete')
+      filter(!(word1 %in% stopwords$term))%>%  
+      filter(!(word2 %in% stopwords$term))
+    message('...Removal of stopwords complete')
     
     if (spellcheck){
       bigram_sample <- bigram_sample %>%
@@ -180,23 +169,11 @@ generate_trigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descriptive_
   
   if (cleanse){
     trigram_sample<-trigram_sample %>%
-      filter(!(word1 %in% stopwords$term) & !str_detect(word1, '.*\\d.*'))%>%  
-      filter(!(word2 %in% stopwords$term) & !str_detect(word2, '.*\\d.*')) %>%
-      filter(!(word3 %in% stopwords$term) & !str_detect(word3, '.*\\d.*')) 
-    message('...Removal of words with digits and stopwords complete')
+      filter(!(word1 %in% stopwords$term))%>%  
+      filter(!(word2 %in% stopwords$term)) %>%
+      filter(!(word3 %in% stopwords$term)) 
+    message('...Removal of stopwords complete')
     
-    trigram_sample<-trigram_sample %>%
-      mutate(word1=word1 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names(),
-             word2=word2 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names(),
-             word3=word3 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names()) %>%
-      filter(word1!='' & word2!='' & word3!='')
-    message('...Removal of internet slang words and people names complete')
     if (spellcheck){
       trigram_sample <- trigram_sample %>%
         filter(hunspell_check(trigram_sample$word1, dict = dictionary("en_US")))
@@ -243,34 +220,13 @@ generate_quadrigrams<-function(source, cleanse=TRUE, spellcheck=FALSE, descripti
   if (cleanse){
     # filter stopwords and words with digits
     quadrigram_sample<-quadrigram_sample %>%
-      filter(!(word1 %in% stopwords$term) & !str_detect(word1, '.*\\d.*'))%>%  
-      filter(!(word2 %in% stopwords$term) & !str_detect(word2, '.*\\d.*')) %>%
-      filter(!(word3 %in% stopwords$term) & !str_detect(word3, '.*\\d.*')) %>%
-      filter(!(word4 %in% stopwords$term) & !str_detect(word4, '.*\\d.*')) 
-    message('...Removal of words with digits and stopwords complete')
+      filter(!(word1 %in% stopwords$term))%>%  
+      filter(!(word2 %in% stopwords$term)) %>%
+      filter(!(word3 %in% stopwords$term)) %>%
+      filter(!(word4 %in% stopwords$term)) 
+    message('...Removal of stopwords complete')
     
-    #remove internet slang and names
-    quadrigram_sample<-quadrigram_sample %>%
-      mutate(word1=word1 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names(),
-             word2=word2 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names())
-    quadrigram_sample <- quadrigram_sample %>%
-      filter(word1!='' & word2!='')
-    
-    quadrigram_sample <-quadrigram_sample %>%
-      mutate(word3=word3 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names(), 
-             word4=word4 %>%
-               replace_internet_slang(replacement ="") %>%
-               replace_names())
-    quadrigram_sample <- quadrigram_sample %>%
-      filter(word3!='' & word4!='')
     gc()
-    message('...Removal of internet slang words and people names complete')
     if (spellcheck){
       quadrigram_sample <- quadrigram_sample %>%
         filter(hunspell_check(quadrigram_sample$word1, dict = dictionary("en_US")))
@@ -343,10 +299,10 @@ generate_train_ngrams<-function(source, spellcheck=FALSE, descriptive_stats=TRUE
   ngrams[[3]]<-generate_trigrams(source=source, cleanse=TRUE, spellcheck=spellcheck, descriptive_stats = descriptive_stats, separate=TRUE, stopwords=stopwords)
   # Print Summary Stats
   range<-c(5, seq(10,100, by=10))
-  print(data.frame(range_pct=range,
-                   unigrams=get_ndist_summary(ngrams[[1]], range),
-                   bigrams=get_ndist_summary(ngrams[[2]], range),
-                   trigrams=get_ndist_summary(ngrams[[3]], range)))
+  print(data.frame(min_ngram_count=range,
+                   unigram_no=get_ndist_summary(ngrams[[1]], range),
+                   bigrams_no=get_ndist_summary(ngrams[[2]], range),
+                   trigrams_no=get_ndist_summary(ngrams[[3]], range)))
   
   #Calculate number of terms required for different language coverages
   print(data.frame(coverage_pct=c(30,40,50,60,70,80,90,95),
@@ -357,35 +313,35 @@ generate_train_ngrams<-function(source, spellcheck=FALSE, descriptive_stats=TRUE
 }
 
 ## GENERATE_TEST_NGRAMS: Generates a df with predictor and response columns from text rows
-generate_test_ngrams<-function(source, spellcheck=FALSE, stopwords=NULL){
+generate_test_ngrams<-function(source){
   #browser()
   #generate ngrams
   bigrams<-generate_bigrams(source=source, 
-                            cleanse=TRUE, 
-                            spellcheck=spellcheck,
+                            cleanse=FALSE, 
+                            spellcheck=FALSE,
                             descriptive_stats=FALSE, 
-                            separate=TRUE, 
-                            stopwords=stopwords) %>% 
+                            separate=TRUE,
+                            stopwords=NULL) %>% 
     mutate(predictor=word1, response=word2, .after=term) %>% 
     # align word colnames with quadrigram
     rename(word4=word2, word3=word1) %>% 
     mutate(word2='', word1='', .after=word3)
   trigrams<-generate_trigrams(source=source, 
-                              cleanse=TRUE,
-                              spellcheck=spellcheck,
+                              cleanse=FALSE,
+                              spellcheck=FALSE,
                               descriptive_stats=FALSE, 
                               separate=TRUE, 
-                              stopwords=stopwords) %>% 
+                              stopwords=NULL) %>% 
     mutate(predictor=paste(word1,word2), response=word3, .after=term) %>%
     # align word colnames with quadrigram
     rename(word4=word3, word3=word2, word2=word1) %>% 
     mutate(word1='', .after=word2)
   quadrigrams<-generate_quadrigrams(source=source, 
-                                    cleanse=TRUE,
-                                    spellcheck=spellcheck,
+                                    cleanse=FALSE,
+                                    spellcheck=FALSE,
                                     descriptive_stats=FALSE, 
                                     separate=TRUE, 
-                                    stopwords=stopwords)
+                                    stopwords=NULL)
   quadrigrams <- quadrigrams %>% 
     mutate(predictor=paste(word1,word2,word3), response=word4, .after=term)
   
@@ -419,63 +375,68 @@ kaggle_stopwords<-read_csv('input/kaggle_stopwords.csv')
 colnames(kaggle_stopwords)<-c('term')
 
 # Sample rows to reduce the size of data requiring processing
-source_data_sample<-sample_rows(source=source_data, target_sample_rate=0.01)
+source_data_sample<-sample_rows(source=source_data, target_sample_rate=0.3)
 
 # Split source data into training, validation and test data set
 source_data_split<-split_testtrain(source_data_sample, c(0.9,0.05,0.05))
-test_rows_sample<-source_data_split[["test"]]
-train_rows_sample<-source_data_split[["train"]]
-valid_rows_sample<-source_data_split[["valid"]]
 
-#Pre-clean sampled rows
-train_rows_clean<-preclean_rows(train_rows_sample)
-test_rows_clean<-preclean_rows(test_rows_sample)
-valid_rows_clean<-preclean_rows(valid_rows_sample)
+#Pre-clean sampled split data sets
+tic('Data cleaning')
+train_rows_clean<-preclean_rows(source_data_split[["train"]])
+test_rows_clean<-preclean_rows(source_data_split[["test"]])
+valid_rows_clean<-preclean_rows(source_data_split[["valid"]])
+toc()
 
 # Write cleaned-up rows sample to disk
 clean_path='intermediate/split/'
-write_rds(test_rows_clean, paste0(clean_path,'test_rows_sample.rds'), "gz")
-write_rds(train_rows_clean, paste0(clean_path,'train_rows_sample.rds'), "gz")
-write_rds(valid_rows_clean, paste0(clean_path, 'validation_rows_sample.rds'), "gz")
+dir.create(clean_path)
+write_rds(train_rows_clean, paste0(clean_path,'train_rows.rds'), "gz")
+write_rds(test_rows_clean, paste0(clean_path,'test_rows.rds'), "gz")
+write_rds(valid_rows_clean, paste0(clean_path, 'validation_rows.rds'), "gz")
 
 # Free up memory
-rm(source_data); rm(source_data_split)
-rm(train_rows_sample); rm(test_rows_sample); rm(valid_rows_sample)
+rm(source_data); rm(source_data_split); rm(source_data_sample)
 gc()
+
 
 ## Generate test and training ngrams
 
-# Dataset 1 (Baseline): no spellcheck + stopwords included 
-train_ngram_nospell_stop<-generate_train_ngrams(source=train_rows_clean, spellcheck=FALSE, descriptive_stats = TRUE, stopwords=toxic_words)
-test_ngrams_nospell_stop<-generate_test_ngrams(source=test_rows_clean, spellcheck=FALSE, stopwords=toxic_words)
-valid_ngrams_nospell_stop<-generate_test_ngrams(source=valid_rows_clean, spellcheck=FALSE, stopwords=toxic_words)
-write_rds(train_ngram_nospell_stop, paste0(target_path,'train_ngrams_nospell_stop.rds'), "gz")
-write_rds(test_ngrams_nospell_stop, paste0(target_path,'test_ngrams_nospell_stop.rds'), "gz")
-write_rds(valid_ngrams_nospell_stop, paste0(target_path,'validation_ngrams_nospell_stop.rds'), "gz")
 
-#FINISHED HERE
+# Test & validation data sets - no preprocessing
+#test_rows_clean<- read_rds('intermediate/split/test_rows.rds')
+#valid_rows_clean<- read_rds('intermediate/split/validation_rows.rds')
+test_ngrams<-generate_test_ngrams(source=test_rows_clean)
+write_rds(test_ngrams, paste0(target_path,'test_ngrams.rds'), compress="gz")
+
+valid_ngrams<-generate_test_ngrams(source=valid_rows_clean)
+write_rds(valid_ngrams, paste0(target_path,'valid_ngrams.rds'), compress="gz")
+
+
+# Dataset 1(Baseline): stopwords included, no spellcheck 
+train_rows_clean<-read_rds('intermediate/split/train_rows.rds')
+tic('Data set with stopwords and no spellcheck')
+train_ngram_nospell_stop<-generate_train_ngrams(source=train_rows_clean, spellcheck=FALSE, descriptive_stats = TRUE, stopwords=toxic_words)
+write_rds(train_ngram_nospell_stop, paste0(target_path,'train_ngrams_nospell_stop.rds'), compress="gz")
+toc()
 
 # Dataset 2: spellcheck + stopwords included
+tic('Data set with stopwords and spellcheck')
 train_ngram_spell_stop<-generate_train_ngrams(source=train_rows_clean, spellcheck=TRUE, descriptive_stats = TRUE, stopwords=toxic_words)
-test_ngrams_spell_stop<-generate_test_ngrams(source=test_rows_clean, spellcheck=TRUE, stopwords=toxic_words)
-valid_ngrams_spell_stop<-generate_test_ngrams(source=valid_rows_clean, spellcheck=TRUE, stopwords=toxic_words)
 write_rds(train_ngram_spell_stop, paste0(target_path,'train_ngrams_spell_stop.rds'), "gz")
-write_rds(test_ngrams_spell_stop, paste0(target_path,'test_ngrams_spell_stop.rds'), "gz")
-write_rds(valid_ngrams_spell_stop, paste0(target_path,'validation_ngrams_spell_stop.rds'), "gz")
+toc()
+
+gc()
 
 # Dataset 3: no spellcheck + stopwords excluded
+tic('Data set with no stopwords and no spellcheck')
 train_ngram_nospell_nostop<-generate_train_ngrams(source=train_rows_clean,spellcheck=FALSE, descriptive_stats = TRUE, stopwords=rbind(toxic_words, kaggle_stopwords))
-test_ngrams_nospell_nostop<-generate_test_ngrams(source=test_rows_clean, spellcheck=FALSE, stopwords=rbind(toxic_words, kaggle_stopwords))        
-valid_ngrams_nospell_nostop<-generate_test_ngrams(source=valid_rows_clean, spellcheck=FALSE, stopwords=rbind(toxic_words, kaggle_stopwords))        
 write_rds(train_ngram_nospell_nostop, paste0(target_path,'train_ngrams_nospell_nostop.rds'), "gz")
-write_rds(test_ngrams_nospell_nostop, paste0(target_path,'test_ngrams_nospell_nostop.rds'), "gz")
-write_rds(valid_ngrams_nospell_nostop, paste0(target_path,'validation_ngrams_nospell_nostop.rds'), "gz")
+toc()
+
+gc()
 
 # Dataset 4: spellcheck + stopwords excluded
+tic('Data set with no stopwords and spellcheck')
 train_ngram_spell_nostop<-generate_train_ngrams(source=train_rows_clean, spellcheck=TRUE, descriptive_stats = TRUE, stopwords=rbind(toxic_words, kaggle_stopwords))
-test_ngrams_spell_nostop<-generate_test_ngrams(source=test_rows_clean, spellcheck=TRUE, stopwords=rbind(toxic_words, kaggle_stopwords))        
-valid_ngrams_spell_nostop<-generate_test_ngrams(source=valid_rows_clean, spellcheck=TRUE, stopwords=rbind(toxic_words, kaggle_stopwords))        
-
 write_rds(train_ngram_spell_nostop, paste0(target_path,'train_ngrams_spell_nostop.rds'), "gz")
-write_rds(test_ngrams_spell_nostop, paste0(target_path,'test_ngrams_spell_nostop.rds'), "gz")
-write_rds(valid_ngrams_spell_nostop, paste0(target_path,'validation_ngrams_spell_nostop.rds'), "gz")
+toc()
