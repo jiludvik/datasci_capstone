@@ -56,7 +56,6 @@ UpdateCount <- function(FreqTbl, model, k=5) {
         return(FreqTbl)
 }
 
-
 ## GOOD_TURING_PREPROC: Function orchestrates Good-Turing preprocessing
 good_turing_preproc<-function(corpus, min_count=4, k=5){
         
@@ -181,7 +180,7 @@ Find_Next_word <- function(xy, words_num, corpus) {
                         # Retrieve all observed bigrams beginning with y: OB
                         ObsBiG <- get.obs.NGrams.by.pre(y, corpus[[2]])
                         # Calculate probabilities of all observed bigrams: P^*(z|y)
-                        ObsBiG <- cal.obs.prob(ObsBiG, corus[[1]], y)
+                        ObsBiG <- cal.obs.prob(ObsBiG, corpus[[1]], y)
                         # Calculate Alpha(y)
                         Alpha_y <- cal.alpha(ObsBiG, corpus[[1]], y)
                         # Retrieve all unigrams end the unobserved bigrams UOBT: z where C(y,z) = 0
@@ -201,32 +200,53 @@ Find_Next_word <- function(xy, words_num, corpus) {
         }
 }
 
-
-## USER_INPUT_PREPROC: Real-time preprocessing of user input
+# PART C: Prediction user interface
+## USER_INPUT_PREPROC: Real-time pre-processing of user input
 # cleans up user input and splits it into words, returns last two words
-user_input_preproc <- function(wordseq) {
-        names(wordseq) <- NULL
-        quest <- replace_hash(wordseq)
-        quest<-replace_tag(quest)
-        quest<-replace_url(quest, replacement = "")
-        quest<-replace_contraction(quest)
-        quest<-replace_word_elongation(quest)
-        quest<-replace_internet_slang(quest, replacement ="")
-        quest<-replace_names(quest)
-        quest <- tokenize_words(x=quest, strip_punct=TRUE, strip_numeric=TRUE, stopwords = toxic_words)[[1]]
-        quest <- replace_white(quest)
-        return(paste(tail(quest, 2), collapse = " "))
+
+user_input_preproc <- function(phrase, stopwords=toxic_words) {
+        prephrase<-phrase %>%
+                replace_hash() %>%
+                replace_tag() %>%
+                replace_url(replacement = "") %>% 
+                replace_contraction() %>%
+                replace_word_elongation() %>%
+                replace_internet_slang( replacement ="") %>%
+                replace_names()
+        prephrase<-tokenize_words(x=prephrase, strip_punct=TRUE, strip_numeric=TRUE, stopwords = stopwords)
+        ret<-lapply(prephrase, function(x) {paste(tail(x,2), collapse=" ")})
+        return(ret)
 }
 
-## Interface to preprocess text and request prediction
-next_word <- function(prephrase, words_num=5, corpus) {
+
+## NEXT_WORD: Function to trigger real time pre-processing and next word prediction
+next_word <- function(phrase, words_num=5, corpus, stopwords=toxic_words) {
         #browser()
-        bigr <- user_input_preproc(prephrase)
-        result <- Find_Next_word(bigr, words_num, corpus)
+        bigram <- user_input_preproc(phrase, stopwords)
+        result <- Find_Next_word(bigram, words_num, corpus)
         if (dim(result)[1] == 0) {
                 rbind(result, list("<Enter more text>", 1))
         }
         return(result)
+}
+
+
+next_word_batch <- function(phrase, corpus, stopwords) {
+        #browser()
+        #phrase<-tokenize_words(x=bigram, strip_punct=TRUE, strip_numeric=TRUE, stopwords = stopwords)
+        #phrase<-lapply(phrase, function(x) {paste(tail(x,2), collapse=" ")})
+        bigram <- user_input_preproc(phrase, stopwords)
+        result=character()
+        for (x in bigram) {
+                result<-append(result,Find_Next_word(x, 1, corpus)$term)
+        }
+        return(result)
+}
+
+# GET_ACCURACY: Function to calculate accuracy of the prediction compared to the actual (held out) response
+get_accuracy<-function(prediction, actual){
+        acc<-sum(prediction==actual)/length(prediction)
+        return(acc)
 }
 
 
@@ -235,31 +255,114 @@ next_word <- function(prephrase, words_num=5, corpus) {
 #Global Options
 input_path='intermediate/pre-processed/'
 toxic_words<-read_lines('input/bad_words.txt')
+kaggle_stopwords<-read_lines('input/kaggle_stopwords.csv')
 
-
-## Load  Training Data
-NgramFreq<-read_rds(paste0 (input_path, 'train_ngrams_nospell_stop.rds'))
-
-# Calculate discounted term count, using Good-Turing
-NgramFreq<-good_turing_preproc(corpus=NgramFreq, min_count = 4, k=5)
-
-# Functional Test
-next_word("He likes to eat ice", corpus=NgramFreq)
-next_word("On Mondays he likes to play a game of", corpus=NgramFreq)
-next_word ("He went the other", corpus=NgramFreq)
-next_word ("Where are you", corpus=NgramFreq)
-next_word ("At what time are you going to", corpus=NgramFreq)
-next_word ("Laughing out", corpus=NgramFreq)
-next_word ("New car", corpus=NgramFreq)
-
-# Calculate accuracy
-test<-read_rds(paste0(input_path,'test_ngrams_nospell_stop.rds'))
-
-test_sample<-test%>%sample_n(5000)
-tic()
-y=character()
-for (x in test_sample$predictor) {
-        y<-append(y,Next_word(x)[1]$term)
+## Functional Test - Quiz 1
+# Load corpora
+i=0
+ngram=list()
+for (filename in dir(input_path, pattern="train*")){
+        i=i+1
+        message('ngram[[',i,']]: ', filename)
+        ngram[[i]]<-read_rds(paste0 (input_path, filename))
+        ngram[[i]]<-good_turing_preproc(corpus=ngram[[i]], min_count = 4, k=5)
 }
-toc()
-accuracy<-sum(y==test_sample$response)/length(y)
+
+# Select the preferred corpus
+NgramFreq<-ngram[[2]] #train_ngrams_nospell_stop.rds
+# Functional test - Quiz 1
+next_word("The guy in front of me just bought a pound of bacon, a bouquet, and a case of", corpus=NgramFreq)
+# options: soda, beer, cheese, pretzels answer: 4.beer
+next_word ("You're the reason why I smile everyday. Can you follow me please? It would mean the", corpus=NgramFreq)
+# options: world, universe, most, best answer: 1.world
+next_word ("Hey sunshine, can you follow me and make me the", corpus=NgramFreq)
+#options: smelliest, happiest, saddest, bluest answer: NA - guess happiest
+next_word ("Very early observations on the Bills game: Offense still struggling but the", corpus=NgramFreq)
+#options: players, defense, crowd, referees answer: NA - guess crowd
+next_word ("Go on a romantic date at the", corpus=NgramFreq)
+#options: movies, grocery, beach, mall answer: NA - guess beach
+next_word ("Well I'm pretty sure my granny has some old bagpipes in her garage I'll dust them off and be on my", corpus=NgramFreq)
+# options: way, phone, horse, motorcycle answer: 1. way
+next_word ("Ohhhhh #PointBreak is on tomorrow. Love that film and haven't seen it in quite some", corpus=NgramFreq)
+# options: weeks, time, thing, years answer: 1. time
+next_word ("After the ice bucket challenge Louis will push his long wet hair out of his eyes with his little", corpus=NgramFreq)
+#options: ears, fingers, toes, eyes answer: NA guess: fingers
+next_word ("Be grateful for the good times and keep the faith during the", corpus=NgramFreq)
+#options: worse, hard, sad, bad answer: NA guess-  bad
+next_word ("If this isn't the cutest thing you've ever seen, then you must be", corpus=NgramFreq)
+#options: callous, insensitive, asleep, insane answer: NA guess insane
+
+# likely to be 4 out of 10 correctly - stopwords are the problem
+
+# Select the preferred corpus and stopword list
+#NgramFreq<-ngram[[1]]
+# Functional test
+next_word("The guy in front of me just bought a pound of bacon, a bouquet, and a case of", corpus=NgramFreq)
+next_word ("You're the reason why I smile everyday. Can you follow me please? It would mean the", corpus=NgramFreq)
+next_word ("Hey sunshine, can you follow me and make me the", corpus=NgramFreq)
+next_word ("Very early observations on the Bills game: Offense still struggling but the", corpus=NgramFreq)
+next_word ("Go on a romantic date at the", corpus=NgramFreq)
+next_word ("Well I'm pretty sure my granny has some old bagpipes in her garage I'll dust them off and be on my", corpus=NgramFreq)
+next_word ("Ohhhhh #PointBreak is on tomorrow. Love that film and haven't seen it in quite some", corpus=NgramFreq)
+next_word ("After the ice bucket challenge Louis will push his long wet hair out of his eyes with his little", corpus=NgramFreq)
+next_word ("Be grateful for the good times and keep the faith during the", corpus=NgramFreq)
+next_word ("If this isn't the cutest thing you've ever seen, then you must be", corpus=NgramFreq)
+
+# corpus train_ngrams_nospell_stop.rds
+
+
+## Calculate Prediction Accuracy for 1000 validation ngrams using four different corpora 
+set.seed(158)
+valid<-read_rds(paste0(input_path,'valid_ngrams.rds')) %>% sample_n(1000)
+prediction=list()
+accuracy=numeric()
+for (i in 1:4) {
+        tic()
+        if (i %in% c(1, 3)) {
+                prediction[[i]]<-next_word_batch (phrase=valid$predictor,
+                                                  corpus=ngram[[i]], 
+                                                  stopwords=rbind(toxic_words,kaggle_stopwords))} 
+        else {
+                prediction[[i]]<-next_word_batch (phrase=valid$predictor,
+                                                  corpus=ngram[[i]], 
+                                                  stopwords=kaggle_stopwords)}
+                
+        toc()
+        #accuracy<-append(accuracy, sum(prediction[[i]]==valid$response)/length(prediction[[i]]))
+        accuracy<-append(accuracy, get_accuracy(prediction[[i]],valid$response))
+}
+
+print(accuracy)
+# 0.042 0.125 0.040 0.123
+# Corpora 2 & 4 (train_ngrams_nospell_stop.rds and train_ngrams_spell_stop.rds) generate highest accuracy and will be taken into the next round of optimisations
+
+
+##Tune K/Min_Count Hyperparameters
+# For the best performing corporus (train_ngrams_nospell_stop.rds)
+
+valid_full<-read_rds('intermediate/pre-processed/valid_ngrams.rds')
+ngram<-read_rds('intermediate/pre-processed/train_ngrams_nospell_stop.rds')
+pred_metrics<-data.frame()
+for (k_const in seq(1,6, by=1)){
+        message('k/min_count=', k_const)
+        start <- Sys.time ()
+        message('...Preprocessing ngrams')
+        ngram_gt<-good_turing_preproc(corpus=ngram, min_count = k_const, k=k_const)
+        for (fold in 1:5){
+                message('...Processing fold ',fold)
+                set.seed(fold)
+                valid_sample<-sample_n(valid_full,200)
+                prediction<-next_word_batch (phrase=valid_sample$predictor, corpus=ngram_gt, stopwords=toxic_words)
+                pred_metrics<-rbind(pred_metrics, data.frame(
+                        "min_count"=k_const,
+                        "k"=k_const,
+                        "fold"=fold,
+                        "accuracy_pct"=get_accuracy(prediction,valid_sample$response)*100))
+        }
+        act<-pred_metrics %>% filter(pred_metrics$k==1) %>% summarise(accuracy=mean(accuracy_pct))
+        message('Accuracy=', act[1,1],'%')
+        elapsed<-Sys.time () - start
+        message('Elapsed time=', round(elapsed,1))
+        gc()
+}
+pred_metrics%>% group_by(k) %>% summarise(accuracy_pct=mean(accuracy_pct))
