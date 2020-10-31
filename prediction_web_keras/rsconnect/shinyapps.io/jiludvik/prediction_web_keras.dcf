@@ -1,0 +1,13 @@
+name: prediction_web_keras
+title: prediction_web_keras
+username:
+account: jiludvik
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 3132938
+bundleId: 3804283
+url: https://jiludvik.shinyapps.io/prediction_web_keras/
+when: 1604150424.32522
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: model/saved_model.pb|model/variables/variables.data-00000-of-00001|model/variables/variables.index
