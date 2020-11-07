@@ -47,20 +47,61 @@ get_accuracy<-function(prediction, actual){
 # Helper function to round x down to a number divisble by m
 round_down <- function(x,m) m*floor(x / m)
 
+#Function to write batched up dense matrix version of X and y to disk - NOT USED IN THIS VERSION OF THE SCRIPT
+write_data_batch<-function(X, y, chunk_size, path){
+        #browser()
+        batch_count<- as.integer(ceiling(dim(y)[1]/chunk_size))
+        dir.create(path)
+        created_files<-character()
+        for (i in 0:batch_count){
+                start_row<-i*batch_count
+                end_row<-start_row+batch_size
+                filename_X<-paste0(sprintf("%04d", i+1),'_x.rds')
+                filename_y<-paste0(sprintf("%04d", i+1),'_y.rds')
+                saveRDS(X[start_row+1:end_row,], paste0(path,filename_X))
+                saveRDS(as.matrix(y[start_row:end_row,]), paste0(path,filename_y))
+                append(created_files, c(filename_X, filename_y))
+        }
+        return(batch_count)
+}
+
+# Generator function returning a list with predictor and response matrices - NOT USED IN THIS VERSION OF THE SCRIPT
+read_data_batch <-function(path) {
+        batch_count<-length(sort(dir(path,'*')))/2
+        i<-0
+        function(){
+                i<<-i+1
+                if (i <=batch_count) {
+                        filename_x<-paste0(path, sprintf("%04d", i),'_x.rds')
+                        filename_y<-paste0(path, sprintf("%04d", i),'_y.rds')
+                        message ('Reading file: ', filename_x,' & ', filename_y)
+                        list(readRDS(filename_x), readRDS(filename_y))
+                } else i<<-0
+        }
+}
+
+
+
 # LOAD DATA
 setwd("/Users/jiri/Documents/data_science_jhu/10_capstone")
 source<-readRDS('intermediate/pre-processed/train_ngrams_keras.rds')
+#copy <- source
+#source<-copy
+
+cat ('Number of ngram datasets:', length(source))
 
 # GENERAL NGRAM PREPROCESSING
 # set minimum threshold for ngrams instances for ngram to be used
 count_threshold<-c(5,4,2,1)
 # print number of unique ngrams in each data set with count > threshold
+print('Number of unique sequences > threshold')
 for (i in 1:4) {print(sum(source[[i]]$term_instances_in_sample>count_threshold[i]))}
 
 # set number of unique ngrams to be sampled from each data set
-ngram_sample_size<-1000
-batch_size<-64
+ngram_sample_size<-70000 # this is the maximum this version of the script can handle
+batch_size<-1000
 
+# pre-filter loaded data
 ngrams<-list()
 for (i in 1:4) {
         source[[i]]<-source[[i]][1:2] # strip fields that are not required
@@ -80,6 +121,7 @@ for (i in 1:4) {
         #ngrams[[i]]<-sample_n(source[[i]], size=round_down(nrow(source[[i]]), batch_size)) #make ngrams# divisble by batch_size
         message('Number of ',i+1,'-gram instances after adjusting for batch_size:', length(ngrams[[i]]))
 }
+
 
 # MODEL-SPECIFIC PRE-PROCESSING
 # Combine trigrams and quadrigrams into a training data set
@@ -104,15 +146,14 @@ message('Max Sequence Length:', max_length)
 X<-sequences[,1:max_length-1]
 y<-sequences[,max_length]
 
-# one-hot encoding of the outputs
+# one-hot encoding of the outputs - below version works only wirh
 message('One-hot encoding outputs')
+y<- to_categorical(y)
 
-# using mltools::one_hot encoder
-#y<-mltools::one_hot(data.table::data.table(y=as.factor(y)), cols=c('y'))
-# does not work with smaller batch sizes
+# below version could be used with ngram_sample_size>70k
+#y_ohe<-Matrix::sparse.model.matrix(object=~.-1, data=data.frame(as.factor(y)))
+#batch_count<-write_data_batch(X, y_ohe, batch_size, 'intermediate/keras_input/')
 
-# using keras::to_categorical (max 120k unique ngrams)
-y<-to_categorical(y, num_classes=vocab_size)
 
 # DEFINE & TRAIN THE PREDICTIVE MODEL
 # define model
@@ -124,7 +165,10 @@ model %>%
         layer_lstm(50) %>%
         layer_dense(vocab_size,activation="softmax")
 
-#model2 %>% # same or worse results than model
+cat(summary(model))
+
+#model2<- keras_model_sequential()
+#model2 %>% # same or worse results than model1
 #        layer_embedding(input_dim=vocab_size, 
 #                        output_dim=10, 
 #                        input_length = max_length-1 ) %>%
@@ -133,32 +177,22 @@ model %>%
 #        layer_dense(100, activation="relu") %>%
 #        layer_dense(vocab_size,activation="softmax")
 
-#model<- keras_model_sequential()
-#model %>%
-#        layer_embedding(input_dim=vocab_size, 
-#                        output_dim=10, 
-#                        input_length = max_length-1,
-#                        batch_size=batch_size) %>%
-#        layer_lstm(50, 
-#                   batch_size=batch_size,
-#                   batch_input_shape=c(batch_size, max_length-1)) %>%
-#        layer_dense(vocab_size,
-#                    activation="softmax", 
-#                    batch_size=batch_size,
-#                    batch_input_shape=c(batch_size, max_length-1)
-#                    )
-
-cat(summary(model))
-
 # compile model
 compile(model, 
         loss='categorical_crossentropy', 
         optimizer='adam', 
         metrics=c('accuracy'))
 
-# fit model
-epochs<-10
+# Create generator function to load pre-processed data from disk
+#generator <- py_iterator(read_data_batch('intermediate/keras_input/'), completed = NA)
+#iterate(generator, print)
+
+# fit model (non-batch)
+epochs<-100
 fit(model, X, y, epochs=epochs, batch_size=batch_size, verbose=2)
+
+# fit model (batch) - stops due to error messages - probably due to incompatibility of keras and tensor flow
+#fit_generator(object=model, generator=generator, steps_per_epoch=batch_count, epochs=epochs, verbose=2)
 
 #copy weights to a new model used for prediction
 batch_size=1
@@ -224,6 +258,6 @@ get_accuracy(prediction,test$response)
 
 dir.create('intermediate/models')
 
-#save_model_hdf5(model, "intermediate/models/model_3_4grams_150kseqs.h5")
-save_model_tf(model, "intermediate/models/model_3_4grams_150kseqs.tf")
+save_model_hdf5(model, "intermediate/models/model_3_4grams_150kseqs.h5")
+#save_model_tf(model, "intermediate/models/model_3_4grams_150kseqs.tf")
 save_text_tokenizer(tokenizer, "intermediate/models/tokenizer_3_4grams_150kseqs")
